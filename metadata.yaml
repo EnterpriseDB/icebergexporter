@@ -1,0 +1,21 @@
+type: exporter
+scope_name: github.com/enterprisedb/icebergexporter
+
+status:
+  class: exporter
+  stability:
+    alpha: [traces, metrics, logs]
+  distributions: []
+  codeowners:
+    active: [enterprisedb]
+
+tests:
+  config:
+    storage:
+      endpoint: http://localhost:9000
+      bucket: otel-data
+      access_key: minioadmin
+      secret_key: minioadmin
+    catalog:
+      type: rest
+      uri: http://localhost:19120/api/v1
