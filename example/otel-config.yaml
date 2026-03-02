@@ -1,0 +1,53 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 5s
+
+exporters:
+  iceberg:
+    storage:
+      endpoint: http://minio:9000
+      bucket: otel-data
+      prefix: iceberg
+      access_key: minioadmin
+      secret_key: minioadmin
+      region: us-east-1
+      path_style: true
+    catalog:
+      type: rest
+      uri: http://lakekeeper:8181/catalog
+      namespace: otel
+      warehouse: otel
+    buffer:
+      max_size_bytes: 134217728
+      flush_interval: 10s
+  debug:
+    verbosity: basic
+
+extensions:
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [iceberg, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [iceberg, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [iceberg, debug]

@@ -1,0 +1,265 @@
+# icebergexporter
+
+An OpenTelemetry Collector exporter that writes traces, logs, and metrics as
+Parquet files to S3-compatible storage, optionally managed by an Iceberg REST
+catalogue.
+
+**OTel Collector → Parquet on S3 → queryable via any Iceberg-compatible engine**
+
+## Architecture
+
+```
+OTel Collector pipeline
+  → consumeTraces / consumeLogs / consumeMetrics
+    → Arrow converter (pdata → columnar arrow.Record)
+      → Buffer manager (size + time hybrid flush)
+        → Parquet writer (zstd compressed)
+          → S3 upload (Hive-style partition paths)
+            → Iceberg catalogue commit (optional)
+```
+
+Signals are written to 7 tables:
+
+| Signal  | Table(s) |
+|---------|----------|
+| Traces  | `otel_traces` |
+| Logs    | `otel_logs` |
+| Metrics | `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exp_histogram`, `otel_metrics_summary` |
+
+Each table is partitioned by time on its timestamp column
+(`start_time_unix_nano` for traces/metrics, `time_unix_nano` for logs) using
+Hive-style paths. The partition granularity is configurable (`hour`, `day`, or
+`month`; default `hour`):
+
+- **Hour:** `{table}/data/year=2025/month=03/day=02/hour=14/{uuid}.parquet`
+- **Day:** `{table}/data/year=2025/month=03/day=02/{uuid}.parquet`
+- **Month:** `{table}/data/year=2025/month=03/{uuid}.parquet`
+
+### Promoted attributes
+
+Frequently queried OTel attributes are extracted as top-level Parquet columns
+(prefixed `attr_`) for predicate pushdown. Remaining attributes are serialised
+as JSON in `attributes_remaining`. Defaults:
+
+- **Traces:** `service.name`, `http.method`, `http.status_code`, `http.url`, `http.route`, `db.system`, `rpc.method`, `rpc.service`
+- **Logs:** `service.name`, `log.file.path`, `exception.type`, `exception.message`
+- **Metrics:** `service.name`, `host.name`
+
+Override via `promoted.traces`, `promoted.logs`, `promoted.metrics` in config.
+
+### Buffering
+
+The buffer manager uses a hybrid flush strategy:
+
+- **Size trigger:** synchronous flush when a table's buffer exceeds
+  `max_size_bytes` (default 128 MB). Errors propagate to the collector for
+  retry via the OTel exporter helper.
+- **Time trigger:** background flush of all non-empty buffers every
+  `flush_interval` (default 60s). Errors are logged and records re-appended.
+
+Bytes-per-row is calibrated after the first Parquet write per table, then
+updated via exponential moving average.
+
+## Quickstart
+
+Prerequisites: Docker and Docker Compose.
+
+```sh
+git clone https://github.com/enterprisedb/icebergexporter.git
+cd icebergexporter
+make up
+```
+
+This starts:
+
+- **MinIO** — S3-compatible storage (console at `http://localhost:9001`,
+  credentials `minioadmin`/`minioadmin`)
+- **Lakekeeper** — Iceberg REST catalogue (API at `http://localhost:8181`)
+- **OTel Collector** — custom build with the iceberg exporter, configured with
+  `catalog.type: rest` to commit Iceberg metadata via Lakekeeper
+- **telemetrygen** — generates traces (10/s), metrics (2/s), and logs (2/s)
+
+After ~30 seconds, Parquet files appear in MinIO under
+`otel-data/iceberg/otel_traces/data/...`. Browse them at
+`http://localhost:9001` → bucket `otel-data`.
+
+To tear down:
+
+```sh
+make down
+```
+
+### Querying with DuckDB
+
+```sql
+-- Install and load extensions
+INSTALL httpfs; LOAD httpfs;
+SET s3_endpoint='localhost:9000';
+SET s3_access_key_id='minioadmin';
+SET s3_secret_access_key='minioadmin';
+SET s3_use_ssl=false;
+SET s3_url_style='path';
+
+-- Query traces
+SELECT name, attr_service_name, duration_nano / 1e6 AS duration_ms
+FROM read_parquet('s3://otel-data/iceberg/otel_traces/data/**/*.parquet')
+LIMIT 10;
+
+-- Query logs
+SELECT severity_text, body, attr_service_name
+FROM read_parquet('s3://otel-data/iceberg/otel_logs/data/**/*.parquet')
+LIMIT 10;
+
+-- Query metrics
+SELECT metric_name, value_double, value_int, attr_service_name
+FROM read_parquet('s3://otel-data/iceberg/otel_metrics_gauge/data/**/*.parquet')
+LIMIT 10;
+```
+
+### Querying with pyarrow
+
+```python
+import pyarrow.parquet as pq
+import s3fs
+
+fs = s3fs.S3FileSystem(
+    endpoint_url="http://localhost:9000",
+    key="minioadmin", secret="minioadmin",
+)
+
+dataset = pq.ParquetDataset(
+    "otel-data/iceberg/otel_traces/data/",
+    filesystem=fs,
+)
+table = dataset.read()
+print(table.schema)
+print(table.to_pandas().head())
+```
+
+## Configuration reference
+
+```yaml
+exporters:
+  iceberg:
+    storage:
+      endpoint: http://minio:9000      # Required. S3-compatible endpoint.
+      bucket: otel-data                 # Required. Target bucket.
+      prefix: iceberg                   # Key prefix for all objects. Default: "iceberg"
+      region: us-east-1                 # AWS region. Default: "us-east-1"
+      access_key: minioadmin            # S3 access key.
+      secret_key: minioadmin            # S3 secret key.
+      path_style: true                  # Use path-style URLs (required for MinIO). Default: true
+
+    catalog:
+      type: rest                        # "rest" or "noop". Default: "rest"
+      uri: http://catalog:8181          # REST catalogue URI (required when type=rest).
+      namespace: otel                   # Iceberg namespace. Default: "otel"
+      warehouse: otel                   # Warehouse name in the catalogue (rest only).
+
+    buffer:
+      max_size_bytes: 134217728         # Flush when buffer exceeds this size. Default: 128 MB
+      flush_interval: 60s               # Background flush interval. Default: 60s
+
+    partition:
+      granularity: hour                 # Partition time resolution: "hour", "day", or "month". Default: "hour"
+
+    promoted:                           # Override default promoted attributes.
+      traces:
+        - service.name
+        - http.method
+      logs:
+        - service.name
+      metrics:
+        - service.name
+```
+
+### Catalogue modes
+
+| Mode   | Behaviour |
+|--------|-----------|
+| `noop` | Writes Parquet files to S3 only. No Iceberg metadata. Files are queryable directly via `read_parquet()` globs. |
+| `rest` | Writes Parquet files to S3, then commits them to an Iceberg REST catalogue (e.g., [Lakekeeper](https://lakekeeper.io), Apache Polaris). Creates namespaces and tables on first write. |
+
+The dev stack uses Lakekeeper as the REST catalogue. Any implementation that
+conforms to the [Iceberg REST OpenAPI spec](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml) should work.
+
+## Building
+
+### As a standalone collector
+
+```sh
+# Install the OTel Collector Builder
+go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
+
+# Build the collector binary
+builder --config=builder-config.yaml
+
+# Run it
+./dist/otelcol-iceberg --config=example/otel-config.yaml
+```
+
+### Docker
+
+```sh
+docker build -t otelcol-iceberg .
+```
+
+## Development
+
+```sh
+make build          # Compile
+make test           # Unit tests with race detector
+make vet            # go vet
+make lint           # golangci-lint (must be installed)
+make fmt            # gofmt
+make tidy           # go mod tidy
+make up             # Start local stack (MinIO + Lakekeeper + Collector + telemetrygen)
+make down           # Tear down local stack and remove volumes
+```
+
+### Dependency gotchas
+
+**iceberg-go version pinning:** `iceberg-go` v0.4.0 is broken by a transitive
+dependency on `substrait-go` v4.4.0. We're pinned to **v0.5.0-rc0**. When
+v0.5.0 stable lands, upgrade. Key API differences from v0.4.0:
+
+- `LoadTable` takes 2 args (ctx, identifier), not 3
+- `NewPartitionSpec` returns a value, not a pointer
+- `PartitionSpec.Fields()` returns `iter.Seq[PartitionField]` — use single
+  variable range (`for f := range`) not two-variable
+
+**iceberg-go S3 IO scheme registration:** Cloud storage IO schemes aren't
+registered by default. The codebase includes a blank import to register them:
+
+```go
+import _ "github.com/apache/iceberg-go/io/gocloud"
+```
+
+Without this, any operation that resolves an `s3://` path fails with
+`io scheme not registered`.
+
+**OTel Collector v0.146.1:** `exportertest.NewNopSettings()` requires a
+`component.Type` argument. The builder binary is called `builder`, not `ocb`.
+
+**Arrow v18:** `schema.FieldsByName()` returns `[]arrow.Field`, not `[]int`.
+Unsigned integer types must be mapped to signed equivalents for Iceberg
+compatibility — Iceberg has no unsigned integer types.
+
+## Known limitations
+
+- **No integration tests.** The `//go:build integration` tag is set up but no
+  integration tests exist yet. Unit test coverage is good but the S3/catalogue
+  path is only validated manually via the dev stack.
+- **No schema evolution.** If the promoted attributes config changes after
+  tables are created, existing tables keep the old schema.
+- **Partition granularity is immutable.** Changing `partition.granularity` after
+  tables have been created requires recreating the tables. The exporter does not
+  alter existing partition specs.
+- **Partial metrics e2e coverage.** Gauge metrics are verified end-to-end.
+  Sum, histogram, exponential histogram, and summary have unit tests but no
+  e2e validation.
+- **No compaction.** The exporter writes many small files. Compaction is not
+  the exporter's responsibility — it belongs to the platform layer that owns
+  the Iceberg tables. Use an external process such as
+  [pyiceberg](https://py.iceberg.apache.org/),
+  Spark (`CALL rewrite_data_files`), or Trino for periodic compaction.

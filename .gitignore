@@ -1,0 +1,41 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/icebergexporter
+/otelcol-iceberg
+
+# Test
+*.test
+*.out
+coverage.html
+
+# Dependencies
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+/dist/
+/build/
+
+# Docker compose state
+example/.data/
+example/.env
+
+# LLM agent settings
+.claude/settings.local.json
+
+# Research notes
+.research/

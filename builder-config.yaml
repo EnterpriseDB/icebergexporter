@@ -1,0 +1,26 @@
+dist:
+  name: otelcol-iceberg
+  description: OTel Collector with Iceberg exporter
+  output_path: ./dist
+
+exporters:
+  - gomod: github.com/enterprisedb/icebergexporter v0.0.0
+    path: .
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.146.1
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.146.1
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.146.1
+
+extensions:
+  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.146.1
+
+replaces:
+  - github.com/enterprisedb/icebergexporter => .
+
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.52.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.52.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.52.0
