@@ -1,3 +1,6 @@
+// Copyright 2026- EnterpriseDB
+// SPDX-License-Identifier: Apache-2.0
+
 package arrow
 
 // PromotedAttributes defines which OTel attributes are promoted to top-level

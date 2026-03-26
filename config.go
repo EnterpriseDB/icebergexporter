@@ -1,3 +1,6 @@
+// Copyright 2026- EnterpriseDB
+// SPDX-License-Identifier: Apache-2.0
+
 package icebergexporter
 
 import (
