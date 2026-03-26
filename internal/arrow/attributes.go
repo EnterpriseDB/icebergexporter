@@ -5,9 +5,21 @@ package arrow
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 )
+
+// jsonString marshals v to a JSON string. It panics on failure, which is
+// intentional: the callers only marshal maps and slices of primitives, so
+// a marshal error would indicate a programming bug, not a runtime condition.
+func jsonString(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("json.Marshal(%T): %v", v, err))
+	}
+	return string(b)
+}
 
 // PromotedResult holds the extracted promoted attribute values and the JSON
 // remainder string for attributes that were not promoted.
@@ -46,14 +58,13 @@ func ExtractPromotedAttributes(attrs pcommon.Map, promoted []string) PromotedRes
 	})
 
 	if len(remainder) > 0 {
-		b, _ := json.Marshal(remainder)
-		result.Remainder = string(b)
+		result.Remainder = jsonString(remainder)
 	}
 
 	return result
 }
 
-// MapToJSON serialises a pcommon.Map to a JSON string.
+// MapToJSON serializes a pcommon.Map to a JSON string.
 // Returns empty string for empty maps.
 func MapToJSON(m pcommon.Map) string {
 	if m.Len() == 0 {
@@ -64,8 +75,7 @@ func MapToJSON(m pcommon.Map) string {
 		out[k] = valueToAny(v)
 		return true
 	})
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 func valueToAny(v pcommon.Value) any {

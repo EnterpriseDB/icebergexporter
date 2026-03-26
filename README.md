@@ -2,7 +2,7 @@
 
 An OpenTelemetry Collector exporter that writes traces, logs, and metrics as
 Parquet files to S3-compatible storage, optionally managed by an Iceberg REST
-catalogue.
+catalog.
 
 **OTel Collector → Parquet on S3 → queryable via any Iceberg-compatible engine**
 
@@ -15,7 +15,7 @@ OTel Collector pipeline
       → Buffer manager (size + time hybrid flush)
         → Parquet writer (zstd compressed)
           → S3 upload (Hive-style partition paths)
-            → Iceberg catalogue commit (optional)
+            → Iceberg catalog commit (optional)
 ```
 
 Signals are written to 7 tables:
@@ -27,7 +27,7 @@ Signals are written to 7 tables:
 | Metrics | `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exp_histogram`, `otel_metrics_summary` |
 
 Each table is partitioned by time on its timestamp column
-(`start_time_unix_nano` for traces/metrics, `time_unix_nano` for logs) using
+(`start_time_unix_nano` for traces, `time_unix_nano` for logs and metrics) using
 Hive-style paths. The partition granularity is configurable (`hour`, `day`, or
 `month`; default `hour`):
 
@@ -41,7 +41,7 @@ The exporter writes standard Parquet files with Hive-style partition paths, so
 you can query the data at whatever level of sophistication suits your scale.
 Point DuckDB or pyarrow at the files with a glob for quick exploration. Use the
 Hive partition structure (`year=.../month=.../day=.../hour=...`) for predicate
-pushdown when the file count grows. Or enable the Iceberg REST catalogue for
+pushdown when the file count grows. Or enable the Iceberg REST catalog for
 full table metadata — partition pruning via column statistics, snapshot
 isolation, compaction, and retention — when you're running a production
 telemetry system.
@@ -49,7 +49,7 @@ telemetry system.
 ### Promoted attributes
 
 Frequently queried OTel attributes are extracted as top-level Parquet columns
-(prefixed `attr_`) for predicate pushdown. Remaining attributes are serialised
+(prefixed `attr_`) for predicate pushdown. Remaining attributes are serialized
 as JSON in `attributes_remaining`. Defaults:
 
 - **Traces:** `service.name`, `http.method`, `http.status_code`, `http.url`, `http.route`, `db.system`, `rpc.method`, `rpc.service`
@@ -85,10 +85,10 @@ This starts:
 
 - **MinIO** — S3-compatible storage (console at `http://localhost:9001`,
   credentials `minioadmin`/`minioadmin`)
-- **Lakekeeper** — Iceberg REST catalogue (API at `http://localhost:8181`)
+- **Lakekeeper** — Iceberg REST catalog (API at `http://localhost:8181`)
 - **OTel Collector** — custom build with the iceberg exporter, configured with
   `catalog.type: rest` to commit Iceberg metadata via Lakekeeper
-- **telemetrygen** — generates traces (10/s), metrics (2/s), and logs (2/s)
+- **telemetrygen** — generates traces (10/s), metrics (20/s), and logs (20/s)
 
 After ~30 seconds, Parquet files appear in MinIO under
 `otel-data/iceberg/otel_traces/data/...`. Browse them at
@@ -163,9 +163,9 @@ exporters:
 
     catalog:
       type: rest                        # "rest" or "noop". Default: "rest"
-      uri: http://catalog:8181          # REST catalogue URI (required when type=rest).
+      uri: http://catalog:8181          # REST catalog URI (required when type=rest).
       namespace: otel                   # Iceberg namespace. Default: "otel"
-      warehouse: otel                   # Warehouse name in the catalogue (rest only).
+      warehouse: otel                   # Warehouse name in the catalog (rest only).
 
     buffer:
       max_size_bytes: 134217728         # Flush when buffer exceeds this size. Default: 128 MB
@@ -184,14 +184,14 @@ exporters:
         - service.name
 ```
 
-### Catalogue modes
+### Catalog modes
 
 | Mode   | Behaviour |
 |--------|-----------|
 | `noop` | Writes Parquet files to S3 only. No Iceberg metadata. Files are queryable directly via `read_parquet()` globs. |
-| `rest` | Writes Parquet files to S3, then commits them to an Iceberg REST catalogue (e.g., [Lakekeeper](https://lakekeeper.io), Apache Polaris). Creates namespaces and tables on first write. |
+| `rest` | Writes Parquet files to S3, then commits them to an Iceberg REST catalog (e.g., [Lakekeeper](https://lakekeeper.io), Apache Polaris). Creates namespaces and tables on first write. |
 
-The dev stack uses Lakekeeper as the REST catalogue. Any implementation that
+The dev stack uses Lakekeeper as the REST catalog. Any implementation that
 conforms to the [Iceberg REST OpenAPI spec](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml) should work.
 
 ## Building
@@ -254,12 +254,15 @@ Without this, any operation that resolves an `s3://` path fails with
 
 **Arrow v18:** `schema.FieldsByName()` returns `[]arrow.Field`, not `[]int`.
 Unsigned integer types must be mapped to signed equivalents for Iceberg
-compatibility — Iceberg has no unsigned integer types.
+compatibility — Iceberg has no unsigned integer types. The dependency is
+pinned to a pseudo-version (`v18.5.2-0.20260220...`) because no stable
+release includes the fixes we need yet. Replace with a tagged release when
+one lands.
 
 ## Known limitations
 
 - **No integration tests.** The `//go:build integration` tag is set up but no
-  integration tests exist yet. Unit test coverage is good but the S3/catalogue
+  integration tests exist yet. Unit test coverage is good but the S3/catalog
   path is only validated manually via the dev stack.
 - **No schema evolution.** If the promoted attributes config changes after
   tables are created, existing tables keep the old schema.
@@ -274,6 +277,8 @@ compatibility — Iceberg has no unsigned integer types.
   the Iceberg tables. Use an external process such as
   [pyiceberg](https://py.iceberg.apache.org/),
   Spark (`CALL rewrite_data_files`), or Trino for periodic compaction.
+
+---
 
 Copyright 2026- EnterpriseDB
 

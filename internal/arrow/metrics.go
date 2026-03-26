@@ -4,8 +4,6 @@
 package arrow
 
 import (
-	"encoding/json"
-
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -369,8 +367,7 @@ func exemplarsToJSON(exemplars pmetric.ExemplarSlice) string {
 		}
 		out[i] = m
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 func quantileValuesToJSON(qvs pmetric.SummaryDataPointValueAtQuantileSlice) string {
@@ -385,8 +382,7 @@ func quantileValuesToJSON(qvs pmetric.SummaryDataPointValueAtQuantileSlice) stri
 			"value":    qv.Value(),
 		}
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 func uint64SliceToJSON(s []uint64) string {
@@ -398,16 +394,14 @@ func uint64SliceToJSON(s []uint64) string {
 	for i, v := range s {
 		out[i] = int64(v)
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 func float64SliceToJSON(s []float64) string {
 	if len(s) == 0 {
 		return ""
 	}
-	b, _ := json.Marshal(s)
-	return string(b)
+	return jsonString(s)
 }
 
 func appendOptionalFloat64(b array.Builder, has bool, val float64) {

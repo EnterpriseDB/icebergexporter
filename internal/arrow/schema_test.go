@@ -9,7 +9,7 @@ import (
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
 )
 
-func TestSanitiseFieldName(t *testing.T) {
+func TestSanitizeFieldName(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
@@ -20,9 +20,9 @@ func TestSanitiseFieldName(t *testing.T) {
 		{"a.b.c", "a_b_c"},
 	}
 	for _, tt := range tests {
-		got := sanitiseFieldName(tt.input)
+		got := sanitizeFieldName(tt.input)
 		if got != tt.want {
-			t.Errorf("sanitiseFieldName(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("sanitizeFieldName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

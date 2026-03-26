@@ -46,4 +46,11 @@ func TestLogsConverterSingleRecord(t *testing.T) {
 	if rec.NumRows() != 1 {
 		t.Fatalf("expected 1 row, got %d", rec.NumRows())
 	}
+
+	// assertStringCol is defined in traces_test.go (same package)
+	schema := c.Schema()
+	assertStringCol(t, rec, schema, "severity_text", 0, "ERROR")
+	assertStringCol(t, rec, schema, "body", 0, "something went wrong")
+	assertStringCol(t, rec, schema, "attr_service_name", 0, "log-svc")
+	assertStringCol(t, rec, schema, "attr_exception_type", 0, "RuntimeError")
 }

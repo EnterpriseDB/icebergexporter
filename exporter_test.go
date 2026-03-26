@@ -30,7 +30,7 @@ func TestExporterStartShutdown(t *testing.T) {
 	}
 }
 
-func TestConsumeTraces(t *testing.T) {
+func TestConsumeTracesEmpty(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Storage.Endpoint = "http://localhost:9000"
 	cfg.Storage.Bucket = "test"
@@ -42,7 +42,7 @@ func TestConsumeTraces(t *testing.T) {
 	}
 }
 
-func TestConsumeMetrics(t *testing.T) {
+func TestConsumeMetricsEmpty(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Storage.Endpoint = "http://localhost:9000"
 	cfg.Storage.Bucket = "test"
@@ -54,7 +54,7 @@ func TestConsumeMetrics(t *testing.T) {
 	}
 }
 
-func TestConsumeLogs(t *testing.T) {
+func TestConsumeLogsEmpty(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Storage.Endpoint = "http://localhost:9000"
 	cfg.Storage.Bucket = "test"

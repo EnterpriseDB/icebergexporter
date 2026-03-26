@@ -234,7 +234,7 @@ func appendValue(dst array.Builder, src arrowlib.Array, idx int) {
 	// Note: trace_id/span_id are now stored as hex strings (arrow.String),
 	// handled by the array.String case above.
 	default:
-		// Fallback: serialise as string
+		// Fallback: serialize as string
 		dst.(*array.StringBuilder).Append(s.ValueStr(idx))
 	}
 }

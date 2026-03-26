@@ -7,9 +7,34 @@ import (
 	"testing"
 
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
+
+func assertStringCol(t *testing.T, rec arrowlib.Record, schema *arrowlib.Schema, col string, row int, want string) {
+	t.Helper()
+	idx := fieldIndex(schema, col)
+	if idx < 0 {
+		t.Fatalf("field %q not found", col)
+	}
+	got := rec.Column(idx).(*array.String).Value(row)
+	if got != want {
+		t.Errorf("%s[%d] = %q, want %q", col, row, got, want)
+	}
+}
+
+func assertInt64Col(t *testing.T, rec arrowlib.Record, schema *arrowlib.Schema, col string, row int, want int64) {
+	t.Helper()
+	idx := fieldIndex(schema, col)
+	if idx < 0 {
+		t.Fatalf("field %q not found", col)
+	}
+	got := rec.Column(idx).(*array.Int64).Value(row)
+	if got != want {
+		t.Errorf("%s[%d] = %d, want %d", col, row, got, want)
+	}
+}
 
 func TestTracesConverterEmpty(t *testing.T) {
 	c := NewTracesConverter(DefaultTracesPromoted)
@@ -56,16 +81,18 @@ func TestTracesConverterSingleSpan(t *testing.T) {
 	}
 
 	// Verify span name
-	nameIdx := fieldIndex(c.Schema(), "name")
-	if nameIdx < 0 {
-		t.Fatal("name field not found")
-	}
+	assertStringCol(t, rec, c.Schema(), "name", 0, "test-span")
 
-	// Verify duration
-	durIdx := fieldIndex(c.Schema(), "duration_nano")
-	if durIdx < 0 {
-		t.Fatal("duration_nano field not found")
-	}
+	// Verify duration = end - start = 2000000000 - 1000000000
+	assertInt64Col(t, rec, c.Schema(), "duration_nano", 0, 1000000000)
+
+	// Verify promoted attributes
+	assertStringCol(t, rec, c.Schema(), "attr_service_name", 0, "test-svc")
+	assertStringCol(t, rec, c.Schema(), "attr_http_method", 0, "GET")
+
+	// Verify trace_id is lowercase hex
+	assertStringCol(t, rec, c.Schema(), "trace_id", 0, "0102030405060708090a0b0c0d0e0f10")
+	assertStringCol(t, rec, c.Schema(), "span_id", 0, "0102030405060708")
 }
 
 func TestTracesConverterMultipleSpans(t *testing.T) {

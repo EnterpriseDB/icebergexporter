@@ -4,8 +4,6 @@
 package arrow
 
 import (
-	"encoding/json"
-
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -169,8 +167,7 @@ func eventsToJSON(events ptrace.SpanEventSlice) string {
 		}
 		out[i] = m
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 func linksToJSON(links ptrace.SpanLinkSlice) string {
@@ -198,8 +195,7 @@ func linksToJSON(links ptrace.SpanLinkSlice) string {
 		}
 		out[i] = m
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
+	return jsonString(out)
 }
 
 // mergeAttributes creates a new map with resource attrs overlaid by span/log attrs.

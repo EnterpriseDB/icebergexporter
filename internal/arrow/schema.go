@@ -66,7 +66,7 @@ func TracesSchema(promoted []string) *arrow.Schema {
 	// Promoted attributes as nullable string columns
 	for _, attr := range promoted {
 		fields = append(fields, arrow.Field{
-			Name: "attr_" + sanitiseFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
+			Name: "attr_" + sanitizeFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
 		})
 	}
 
@@ -110,7 +110,7 @@ func LogsSchema(promoted []string) *arrow.Schema {
 
 	for _, attr := range promoted {
 		fields = append(fields, arrow.Field{
-			Name: "attr_" + sanitiseFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
+			Name: "attr_" + sanitizeFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
 		})
 	}
 
@@ -241,7 +241,7 @@ func SummarySchema(promoted []string) *arrow.Schema {
 func appendPromotedAndRemainder(fields []arrow.Field, promoted []string) []arrow.Field {
 	for _, attr := range promoted {
 		fields = append(fields, arrow.Field{
-			Name: "attr_" + sanitiseFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
+			Name: "attr_" + sanitizeFieldName(attr), Type: arrow.BinaryTypes.String, Nullable: true,
 		})
 	}
 	fields = append(fields,
@@ -252,8 +252,8 @@ func appendPromotedAndRemainder(fields []arrow.Field, promoted []string) []arrow
 	return fields
 }
 
-// sanitiseFieldName replaces dots with underscores for Arrow/Parquet column names.
-func sanitiseFieldName(name string) string {
+// sanitizeFieldName replaces dots with underscores for Arrow/Parquet column names.
+func sanitizeFieldName(name string) string {
 	result := make([]byte, len(name))
 	for i := range name {
 		if name[i] == '.' {

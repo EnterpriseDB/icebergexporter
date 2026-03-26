@@ -7,7 +7,7 @@ package arrow
 // Parquet/Iceberg columns for each signal type. Promoted attributes are
 // extracted from the attributes map and stored as dedicated columns for
 // efficient filtering and predicate pushdown. Any remaining attributes are
-// serialised as JSON into the attributes_remaining column.
+// serialized as JSON into the attributes_remaining column.
 
 // DefaultTracesPromoted is the default set of promoted attributes for traces.
 var DefaultTracesPromoted = []string{
