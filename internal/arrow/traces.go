@@ -33,7 +33,7 @@ func (c *TracesConverter) Schema() *arrow.Schema {
 }
 
 // Convert transforms ptrace.Traces into an Arrow record.
-func (c *TracesConverter) Convert(td ptrace.Traces) (arrow.Record, error) {
+func (c *TracesConverter) Convert(td ptrace.Traces) (arrow.RecordBatch, error) {
 	builder := array.NewRecordBuilder(c.alloc, c.schema)
 	defer builder.Release()
 
@@ -137,12 +137,11 @@ func (c *TracesConverter) Convert(td ptrace.Traces) (arrow.Record, error) {
 				appendOptionalString(builder.Field(col), scopeAttrs)
 				col++
 				appendOptionalString(builder.Field(col), promoted.Remainder)
-				col++
 			}
 		}
 	}
 
-	return builder.NewRecord(), nil
+	return builder.NewRecordBatch(), nil
 }
 
 func eventsToJSON(events ptrace.SpanEventSlice) string {

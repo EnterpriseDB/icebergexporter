@@ -14,7 +14,7 @@ import (
 type SignalBuffer struct {
 	mu      sync.Mutex
 	table   string
-	records []arrow.Record
+	records []arrow.RecordBatch
 	rows    int64
 	size    int64 // estimated bytes
 
@@ -34,7 +34,7 @@ func (b *SignalBuffer) Table() string {
 }
 
 // Add appends a record to the buffer. The record is retained (ref count incremented).
-func (b *SignalBuffer) Add(rec arrow.Record) {
+func (b *SignalBuffer) Add(rec arrow.RecordBatch) {
 	rec.Retain()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -53,7 +53,7 @@ func (b *SignalBuffer) Add(rec arrow.Record) {
 
 // Drain removes all records from the buffer and returns them along with total
 // row count. Caller is responsible for releasing the returned records.
-func (b *SignalBuffer) Drain() ([]arrow.Record, int64) {
+func (b *SignalBuffer) Drain() ([]arrow.RecordBatch, int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -67,7 +67,7 @@ func (b *SignalBuffer) Drain() ([]arrow.Record, int64) {
 
 // Reappend puts records back into the buffer (e.g. after a failed flush).
 // Records are retained again.
-func (b *SignalBuffer) Reappend(records []arrow.Record) {
+func (b *SignalBuffer) Reappend(records []arrow.RecordBatch) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

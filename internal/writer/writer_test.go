@@ -73,7 +73,7 @@ func (f *memoryFileIO) fileCount() int {
 	return len(f.files)
 }
 
-func makeTracesRecord(nRows int) arrowlib.Record {
+func makeTracesRecord(nRows int) arrowlib.RecordBatch {
 	promoted := iarrow.DefaultTracesPromoted
 	schema := iarrow.TracesSchema(promoted)
 	b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
@@ -139,10 +139,9 @@ func makeTracesRecord(nRows int) arrowlib.Record {
 		b.Field(col).(*array.StringBuilder).AppendNull() // scope_attributes
 		col++
 		b.Field(col).(*array.StringBuilder).AppendNull() // attributes_remaining
-		col++
 	}
 
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 func TestWriterFlush(t *testing.T) {
@@ -161,7 +160,7 @@ func TestWriterFlush(t *testing.T) {
 	rec := makeTracesRecord(10)
 	defer rec.Release()
 
-	bytes, err := w.Flush(context.Background(), iarrow.TableTraces, []arrowlib.Record{rec}, 10)
+	bytes, err := w.Flush(context.Background(), iarrow.TableTraces, []arrowlib.RecordBatch{rec}, 10)
 	if err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-func makeTestRecord(nRows int) arrow.Record {
+func makeTestRecord(nRows int) arrow.RecordBatch {
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "val", Type: arrow.PrimitiveTypes.Int64},
 	}, nil)
@@ -20,7 +20,7 @@ func makeTestRecord(nRows int) arrow.Record {
 	for i := 0; i < nRows; i++ {
 		b.Field(0).(*array.Int64Builder).Append(int64(i))
 	}
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 func TestSignalBufferAddDrain(t *testing.T) {

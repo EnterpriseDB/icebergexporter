@@ -16,7 +16,7 @@ import (
 )
 
 // WriteParquet serializes an Arrow record to Parquet bytes using the given compression.
-func WriteParquet(rec arrow.Record, compression compress.Compression) ([]byte, error) {
+func WriteParquet(rec arrow.RecordBatch, compression compress.Compression) ([]byte, error) {
 	var buf bytes.Buffer
 
 	writerProps := parquet.NewWriterProperties(
@@ -45,7 +45,7 @@ func WriteParquet(rec arrow.Record, compression compress.Compression) ([]byte, e
 
 // MergeRecords concatenates multiple Arrow records with the same schema into one.
 // All input records must share the same schema. Caller must release the returned record.
-func MergeRecords(alloc memory.Allocator, records []arrow.Record) (arrow.Record, error) {
+func MergeRecords(alloc memory.Allocator, records []arrow.RecordBatch) (arrow.RecordBatch, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("no records to merge")
 	}
@@ -86,7 +86,7 @@ func MergeRecords(alloc memory.Allocator, records []arrow.Record) (arrow.Record,
 		cols[i] = concatenated
 	}
 
-	merged := array.NewRecord(schema, cols, totalRows)
+	merged := array.NewRecordBatch(schema, cols, totalRows)
 	// Release the concatenated arrays (the record holds references)
 	for _, col := range cols {
 		col.Release()
