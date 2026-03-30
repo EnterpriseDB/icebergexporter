@@ -1,0 +1,36 @@
+repos:
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.11.4
+    hooks:
+      - id: golangci-lint-full
+        name: golangci-lint
+
+  - repo: local
+    hooks:
+      - id: goimports-check
+        name: goimports
+        entry: sh -c 'test -z "$(goimports -l -local github.com/enterprisedb/icebergexporter .)"'
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-test
+        name: go test
+        entry: go test -race -count=1 ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-mod-tidy-check
+        name: go mod tidy
+        entry: sh -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        pass_filenames: false
+        always_run: true

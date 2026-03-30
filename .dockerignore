@@ -6,6 +6,9 @@
 .research
 .idea
 .vscode
+.editorconfig
+.golangci.yml
+.pre-commit-config.yaml
 .DS_Store
 Thumbs.db
 dist
