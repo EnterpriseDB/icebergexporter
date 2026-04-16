@@ -94,13 +94,18 @@ After ~30 seconds, Parquet files appear in MinIO under
 `otel-data/iceberg/otel_traces/data/...`. Browse them at
 `http://localhost:9001` → bucket `otel-data`.
 
-To tear down:
+To tear down (volumes are removed, clearing all stored data):
 
 ```sh
 make down
 ```
 
 ### Querying with DuckDB
+
+Data is hive-partitioned by `year/month/day/hour`. Querying with a
+partition-scoped path avoids slow S3 listing operations if there is historic
+data. This example sets today as a variable using the `current_date` for ease
+of use.
 
 ```sql
 -- Install and load extensions
@@ -111,19 +116,36 @@ SET s3_secret_access_key='minioadmin';
 SET s3_use_ssl=false;
 SET s3_url_style='path';
 
+-- Build today's partition path prefix
+SET VARIABLE today = 'year=' || year(current_date)
+  || '/month=' || lpad(month(current_date)::VARCHAR, 2, '0')
+  || '/day=' || lpad(day(current_date)::VARCHAR, 2, '0');
+
 -- Query traces
 SELECT name, attr_service_name, duration_nano / 1e6 AS duration_ms
-FROM read_parquet('s3://otel-data/iceberg/otel_traces/data/**/*.parquet')
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_traces/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 
 -- Query logs
 SELECT severity_text, body, attr_service_name
-FROM read_parquet('s3://otel-data/iceberg/otel_logs/data/**/*.parquet')
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_logs/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 
 -- Query metrics
 SELECT metric_name, value_double, value_int, attr_service_name
-FROM read_parquet('s3://otel-data/iceberg/otel_metrics_gauge/data/**/*.parquet')
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_metrics_gauge/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 ```
 

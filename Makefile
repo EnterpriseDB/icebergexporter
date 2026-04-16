@@ -1,4 +1,4 @@
-.PHONY: build test test-integration lint fmt vet tidy check cover install-hooks up down clean
+.PHONY: build test test-integration lint fmt vet tidy check cover scan install-hooks up down clean
 
 build:
 	go build ./...
@@ -25,6 +25,10 @@ tidy:
 check:
 	@which pre-commit > /dev/null 2>&1 || { echo "pre-commit not installed: brew install pre-commit"; exit 1; }
 	pre-commit run --all-files --hook-stage pre-push
+
+scan:
+	@which grype > /dev/null 2>&1 || { echo "grype not installed: brew install grype"; exit 1; }
+	grype dir:. --fail-on high
 
 cover:
 	go test -race -count=1 -coverprofile=coverage.out ./...
