@@ -15,7 +15,7 @@ import (
 
 func TestManagerAddAndFlush(t *testing.T) {
 	var flushCount atomic.Int32
-	flushFn := func(ctx context.Context, table string, records []arrow.Record, totalRows int64) (int64, error) {
+	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
 		flushCount.Add(1)
 		return totalRows * 50, nil
 	}
@@ -23,7 +23,11 @@ func TestManagerAddAndFlush(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mgr := NewManager(0, time.Hour, flushFn, logger) // size=0 means no size-triggered flush
 	mgr.Start()
-	defer mgr.Stop(context.Background())
+	defer func() {
+		if err := mgr.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop failed: %v", err)
+		}
+	}()
 
 	rec := makeTestRecord(10)
 	defer rec.Release()
@@ -40,7 +44,7 @@ func TestManagerAddAndFlush(t *testing.T) {
 
 func TestManagerSizeTriggeredFlush(t *testing.T) {
 	var flushCount atomic.Int32
-	flushFn := func(ctx context.Context, table string, records []arrow.Record, totalRows int64) (int64, error) {
+	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
 		flushCount.Add(1)
 		return totalRows * 50, nil
 	}
@@ -49,7 +53,11 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 	// Set very low size threshold to trigger flush
 	mgr := NewManager(100, time.Hour, flushFn, logger)
 	mgr.Start()
-	defer mgr.Stop(context.Background())
+	defer func() {
+		if err := mgr.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop failed: %v", err)
+		}
+	}()
 
 	rec := makeTestRecord(10)
 	defer rec.Release()
@@ -66,7 +74,7 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 
 func TestManagerStopDrains(t *testing.T) {
 	var flushedRows atomic.Int64
-	flushFn := func(ctx context.Context, table string, records []arrow.Record, totalRows int64) (int64, error) {
+	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
 		flushedRows.Add(totalRows)
 		return totalRows * 50, nil
 	}
@@ -78,7 +86,9 @@ func TestManagerStopDrains(t *testing.T) {
 	rec := makeTestRecord(42)
 	defer rec.Release()
 
-	mgr.Add(context.Background(), "test_table", rec)
+	if err := mgr.Add(context.Background(), "test_table", rec); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
 
 	// Stop should drain
 	if err := mgr.Stop(context.Background()); err != nil {
@@ -92,7 +102,7 @@ func TestManagerStopDrains(t *testing.T) {
 
 func TestManagerMultipleTables(t *testing.T) {
 	flushed := make(map[string]int64)
-	flushFn := func(ctx context.Context, table string, records []arrow.Record, totalRows int64) (int64, error) {
+	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
 		flushed[table] += totalRows
 		return totalRows * 50, nil
 	}
@@ -106,10 +116,16 @@ func TestManagerMultipleTables(t *testing.T) {
 	rec2 := makeTestRecord(20)
 	defer rec2.Release()
 
-	mgr.Add(context.Background(), "traces", rec1)
-	mgr.Add(context.Background(), "logs", rec2)
+	if err := mgr.Add(context.Background(), "traces", rec1); err != nil {
+		t.Fatalf("Add traces failed: %v", err)
+	}
+	if err := mgr.Add(context.Background(), "logs", rec2); err != nil {
+		t.Fatalf("Add logs failed: %v", err)
+	}
 
-	mgr.Stop(context.Background())
+	if err := mgr.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
 
 	if flushed["traces"] != 10 {
 		t.Errorf("expected 10 trace rows, got %d", flushed["traces"])

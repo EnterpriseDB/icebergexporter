@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
-func assertStringCol(t *testing.T, rec arrowlib.Record, schema *arrowlib.Schema, col string, row int, want string) {
+func assertStringCol(t *testing.T, rec arrowlib.RecordBatch, schema *arrowlib.Schema, col string, row int, want string) {
 	t.Helper()
 	idx := fieldIndex(schema, col)
 	if idx < 0 {
@@ -24,7 +24,7 @@ func assertStringCol(t *testing.T, rec arrowlib.Record, schema *arrowlib.Schema,
 	}
 }
 
-func assertInt64Col(t *testing.T, rec arrowlib.Record, schema *arrowlib.Schema, col string, row int, want int64) {
+func assertInt64Col(t *testing.T, rec arrowlib.RecordBatch, schema *arrowlib.Schema, col string, row int, want int64) {
 	t.Helper()
 	idx := fieldIndex(schema, col)
 	if idx < 0 {

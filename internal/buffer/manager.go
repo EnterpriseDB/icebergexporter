@@ -15,7 +15,7 @@ import (
 // FlushFunc is called when a buffer needs flushing. It receives the table name
 // and the accumulated records. Returns the number of Parquet bytes written
 // (for calibration) or an error.
-type FlushFunc func(ctx context.Context, table string, records []arrow.Record, totalRows int64) (parquetBytes int64, err error)
+type FlushFunc func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (parquetBytes int64, err error)
 
 // Manager implements a size+time hybrid buffer manager with per-table buffers.
 type Manager struct {
@@ -61,7 +61,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 // Add adds a record to the named table's buffer. If the buffer exceeds the
 // size threshold, a synchronous flush is triggered and any error is returned
 // to the caller (enabling OTel retry).
-func (m *Manager) Add(ctx context.Context, table string, rec arrow.Record) error {
+func (m *Manager) Add(ctx context.Context, table string, rec arrow.RecordBatch) error {
 	buf := m.getOrCreateBuffer(table)
 	buf.Add(rec)
 

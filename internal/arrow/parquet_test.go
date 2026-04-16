@@ -12,7 +12,7 @@ import (
 	"github.com/apache/arrow-go/v18/parquet/compress"
 )
 
-func makeSimpleRecord(nRows int) arrowlib.Record {
+func makeSimpleRecord(nRows int) arrowlib.RecordBatch {
 	schema := arrowlib.NewSchema([]arrowlib.Field{
 		{Name: "id", Type: arrowlib.PrimitiveTypes.Int64},
 		{Name: "name", Type: arrowlib.BinaryTypes.String},
@@ -23,7 +23,7 @@ func makeSimpleRecord(nRows int) arrowlib.Record {
 		b.Field(0).(*array.Int64Builder).Append(int64(i))
 		b.Field(1).(*array.StringBuilder).Append("row")
 	}
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 func TestWriteParquet(t *testing.T) {
@@ -62,7 +62,7 @@ func TestMergeRecords(t *testing.T) {
 	r2 := makeSimpleRecord(10)
 	defer r2.Release()
 
-	merged, err := MergeRecords(memory.DefaultAllocator, []arrowlib.Record{r1, r2})
+	merged, err := MergeRecords(memory.DefaultAllocator, []arrowlib.RecordBatch{r1, r2})
 	if err != nil {
 		t.Fatalf("MergeRecords failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestMergeRecordsSingle(t *testing.T) {
 	r := makeSimpleRecord(5)
 	defer r.Release()
 
-	merged, err := MergeRecords(memory.DefaultAllocator, []arrowlib.Record{r})
+	merged, err := MergeRecords(memory.DefaultAllocator, []arrowlib.RecordBatch{r})
 	if err != nil {
 		t.Fatalf("MergeRecords single failed: %v", err)
 	}

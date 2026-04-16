@@ -117,14 +117,14 @@ func PartitionKeyFromNano(nanos int64) PartitionKey {
 // PartitionedRecord holds a record and its partition key.
 type PartitionedRecord struct {
 	Key    PartitionKey
-	Record arrowlib.Record
+	Record arrowlib.RecordBatch
 }
 
 // SplitByPartition splits an Arrow record by time partitions at the given
 // granularity. The timestampCol parameter specifies which column contains the
 // microsecond Arrow Timestamp used for partitioning.
 // Caller is responsible for releasing the returned records.
-func SplitByPartition(alloc memory.Allocator, rec arrowlib.Record, timestampCol string, granularity Granularity) ([]PartitionedRecord, error) {
+func SplitByPartition(alloc memory.Allocator, rec arrowlib.RecordBatch, timestampCol string, granularity Granularity) ([]PartitionedRecord, error) {
 	// Find the timestamp column
 	colIdx := -1
 	for i := 0; i < int(rec.NumCols()); i++ {
@@ -195,7 +195,7 @@ func SplitByPartition(alloc memory.Allocator, rec arrowlib.Record, timestampCol 
 }
 
 // selectRows creates a new record containing only the specified row indices.
-func selectRows(alloc memory.Allocator, rec arrowlib.Record, indices []int) (arrowlib.Record, error) {
+func selectRows(alloc memory.Allocator, rec arrowlib.RecordBatch, indices []int) (arrowlib.RecordBatch, error) {
 	schema := rec.Schema()
 	builder := array.NewRecordBuilder(alloc, schema)
 	defer builder.Release()
@@ -206,7 +206,7 @@ func selectRows(alloc memory.Allocator, rec arrowlib.Record, indices []int) (arr
 		}
 	}
 
-	return builder.NewRecord(), nil
+	return builder.NewRecordBatch(), nil
 }
 
 // appendValue copies a single value from src at the given index to dst.

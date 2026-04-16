@@ -75,7 +75,7 @@ func (w *Writer) RegisterSchema(table string, schema *arrowlib.Schema) {
 // Flush is the buffer manager's flush callback. It merges records, splits by
 // partition, writes Parquet files to S3, and commits to the catalog.
 // Returns the total Parquet bytes written (for buffer calibration).
-func (w *Writer) Flush(ctx context.Context, table string, records []arrowlib.Record, totalRows int64) (int64, error) {
+func (w *Writer) Flush(ctx context.Context, table string, records []arrowlib.RecordBatch, totalRows int64) (int64, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}

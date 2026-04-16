@@ -14,11 +14,11 @@ import (
 // MetricRecords holds optional Arrow records for each metric type.
 // Only non-nil records should be written.
 type MetricRecords struct {
-	Gauge        arrowlib.Record
-	Sum          arrowlib.Record
-	Histogram    arrowlib.Record
-	ExpHistogram arrowlib.Record
-	Summary      arrowlib.Record
+	Gauge        arrowlib.RecordBatch
+	Sum          arrowlib.RecordBatch
+	Histogram    arrowlib.RecordBatch
+	ExpHistogram arrowlib.RecordBatch
+	Summary      arrowlib.RecordBatch
 }
 
 // Release releases all non-nil records.
@@ -102,7 +102,7 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 					for l := 0; l < dps.Len(); l++ {
 						dp := dps.At(l)
 						// Gauge schema: base + time + start + val_dbl + val_int + flags + exemplars + promoted + remainder
-						col := c.appendNumberDataPointCore(gaugeB, rm, resource, resourceAttrs, scope, scopeAttrs, m, dp)
+						col := c.appendNumberDataPointCore(gaugeB, rm, resource, scope, m, dp)
 						appendOptionalString(gaugeB.Field(col), exemplarsToJSON(dp.Exemplars()))
 						col++
 						c.appendPromotedAndRemainder(gaugeB, col, resource.Attributes(), dp.Attributes(), resourceAttrs, scopeAttrs)
@@ -114,7 +114,7 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 					for l := 0; l < dps.Len(); l++ {
 						dp := dps.At(l)
 						// Sum schema: base + time + start + val_dbl + val_int + flags + is_monotonic + agg_temp + exemplars + promoted + remainder
-						col := c.appendNumberDataPointCore(sumB, rm, resource, resourceAttrs, scope, scopeAttrs, m, dp)
+						col := c.appendNumberDataPointCore(sumB, rm, resource, scope, m, dp)
 						sumB.Field(col).(*array.BooleanBuilder).Append(sum.IsMonotonic())
 						col++
 						sumB.Field(col).(*array.Int32Builder).Append(int32(sum.AggregationTemporality()))
@@ -129,7 +129,7 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 					dps := hist.DataPoints()
 					for l := 0; l < dps.Len(); l++ {
 						dp := dps.At(l)
-						col := c.appendMetricBase(histB, rm, resource, resourceAttrs, scope, scopeAttrs, m)
+						col := c.appendMetricBase(histB, rm, resource, scope, m)
 						histB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.Timestamp()))))
 						col++
 						histB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.StartTimestamp()))))
@@ -160,7 +160,7 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 					dps := expHist.DataPoints()
 					for l := 0; l < dps.Len(); l++ {
 						dp := dps.At(l)
-						col := c.appendMetricBase(expHistB, rm, resource, resourceAttrs, scope, scopeAttrs, m)
+						col := c.appendMetricBase(expHistB, rm, resource, scope, m)
 						expHistB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.Timestamp()))))
 						col++
 						expHistB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.StartTimestamp()))))
@@ -200,7 +200,7 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 					dps := m.Summary().DataPoints()
 					for l := 0; l < dps.Len(); l++ {
 						dp := dps.At(l)
-						col := c.appendMetricBase(summaryB, rm, resource, resourceAttrs, scope, scopeAttrs, m)
+						col := c.appendMetricBase(summaryB, rm, resource, scope, m)
 						summaryB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.Timestamp()))))
 						col++
 						summaryB.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.StartTimestamp()))))
@@ -223,19 +223,19 @@ func (c *MetricsConverter) Convert(md pmetric.Metrics) (*MetricRecords, error) {
 
 	result := &MetricRecords{}
 	if gaugeRows > 0 {
-		result.Gauge = gaugeB.NewRecord()
+		result.Gauge = gaugeB.NewRecordBatch()
 	}
 	if sumRows > 0 {
-		result.Sum = sumB.NewRecord()
+		result.Sum = sumB.NewRecordBatch()
 	}
 	if histRows > 0 {
-		result.Histogram = histB.NewRecord()
+		result.Histogram = histB.NewRecordBatch()
 	}
 	if expHistRows > 0 {
-		result.ExpHistogram = expHistB.NewRecord()
+		result.ExpHistogram = expHistB.NewRecordBatch()
 	}
 	if summaryRows > 0 {
-		result.Summary = summaryB.NewRecord()
+		result.Summary = summaryB.NewRecordBatch()
 	}
 	return result, nil
 }
@@ -245,9 +245,7 @@ func (c *MetricsConverter) appendMetricBase(
 	b *array.RecordBuilder,
 	rm pmetric.ResourceMetrics,
 	resource pcommon.Resource,
-	resourceAttrs string,
 	scope pcommon.InstrumentationScope,
-	scopeAttrs string,
 	m pmetric.Metric,
 ) int {
 	col := 0
@@ -276,13 +274,11 @@ func (c *MetricsConverter) appendNumberDataPointCore(
 	b *array.RecordBuilder,
 	rm pmetric.ResourceMetrics,
 	resource pcommon.Resource,
-	resourceAttrs string,
 	scope pcommon.InstrumentationScope,
-	scopeAttrs string,
 	m pmetric.Metric,
 	dp pmetric.NumberDataPoint,
 ) int {
-	col := c.appendMetricBase(b, rm, resource, resourceAttrs, scope, scopeAttrs, m)
+	col := c.appendMetricBase(b, rm, resource, scope, m)
 
 	b.Field(col).(*array.TimestampBuilder).Append(arrowlib.Timestamp(NanoToMicro(int64(dp.Timestamp()))))
 	col++

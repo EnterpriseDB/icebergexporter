@@ -97,7 +97,7 @@ func TestSplitByPartitionSinglePartition(t *testing.T) {
 		b.Field(0).(*array.TimestampBuilder).Append(arrowlib.Timestamp(base + int64(i*1e6)))
 		b.Field(1).(*array.StringBuilder).Append("val")
 	}
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	defer rec.Release()
 
 	parts, err := SplitByPartition(memory.DefaultAllocator, rec, "ts", GranularityHour)
@@ -139,7 +139,7 @@ func TestSplitByPartitionMultiplePartitions(t *testing.T) {
 		b.Field(0).(*array.TimestampBuilder).Append(arrowlib.Timestamp(ts.UnixMicro()))
 		b.Field(1).(*array.Int64Builder).Append(int64(i))
 	}
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	defer rec.Release()
 
 	parts, err := SplitByPartition(memory.DefaultAllocator, rec, "ts", GranularityHour)
@@ -189,7 +189,7 @@ func TestSplitByPartitionDayGranularity(t *testing.T) {
 		b.Field(0).(*array.TimestampBuilder).Append(arrowlib.Timestamp(ts.UnixMicro()))
 		b.Field(1).(*array.Int64Builder).Append(int64(i))
 	}
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	defer rec.Release()
 
 	parts, err := SplitByPartition(memory.DefaultAllocator, rec, "ts", GranularityDay)
@@ -234,7 +234,7 @@ func TestSplitByPartitionMonthGranularity(t *testing.T) {
 		b.Field(0).(*array.TimestampBuilder).Append(arrowlib.Timestamp(ts.UnixMicro()))
 		b.Field(1).(*array.Int64Builder).Append(int64(i))
 	}
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	defer rec.Release()
 
 	parts, err := SplitByPartition(memory.DefaultAllocator, rec, "ts", GranularityMonth)
@@ -265,7 +265,7 @@ func TestSplitByPartitionMissingColumn(t *testing.T) {
 	b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	defer b.Release()
 	b.Field(0).(*array.Int64Builder).Append(1)
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	defer rec.Release()
 
 	_, err := SplitByPartition(memory.DefaultAllocator, rec, "ts", GranularityHour)

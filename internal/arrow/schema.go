@@ -71,15 +71,11 @@ func TracesSchema(promoted []string) *arrow.Schema {
 	}
 
 	// Remaining attributes as JSON
-	fields = append(fields, arrow.Field{
-		Name: "resource_attributes", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
-	fields = append(fields, arrow.Field{
-		Name: "scope_attributes", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
-	fields = append(fields, arrow.Field{
-		Name: "attributes_remaining", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
+	fields = append(fields,
+		arrow.Field{Name: "resource_attributes", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "scope_attributes", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "attributes_remaining", Type: arrow.BinaryTypes.String, Nullable: true},
+	)
 
 	return arrow.NewSchema(fields, nil)
 }
@@ -114,15 +110,11 @@ func LogsSchema(promoted []string) *arrow.Schema {
 		})
 	}
 
-	fields = append(fields, arrow.Field{
-		Name: "resource_attributes", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
-	fields = append(fields, arrow.Field{
-		Name: "scope_attributes", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
-	fields = append(fields, arrow.Field{
-		Name: "attributes_remaining", Type: arrow.BinaryTypes.String, Nullable: true,
-	})
+	fields = append(fields,
+		arrow.Field{Name: "resource_attributes", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "scope_attributes", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "attributes_remaining", Type: arrow.BinaryTypes.String, Nullable: true},
+	)
 
 	return arrow.NewSchema(fields, nil)
 }

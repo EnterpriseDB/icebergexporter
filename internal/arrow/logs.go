@@ -32,7 +32,7 @@ func (c *LogsConverter) Schema() *arrow.Schema {
 }
 
 // Convert transforms plog.Logs into an Arrow record.
-func (c *LogsConverter) Convert(ld plog.Logs) (arrow.Record, error) {
+func (c *LogsConverter) Convert(ld plog.Logs) (arrow.RecordBatch, error) {
 	builder := array.NewRecordBuilder(c.alloc, c.schema)
 	defer builder.Release()
 
@@ -119,10 +119,9 @@ func (c *LogsConverter) Convert(ld plog.Logs) (arrow.Record, error) {
 				appendOptionalString(builder.Field(col), scopeAttrs)
 				col++
 				appendOptionalString(builder.Field(col), promoted.Remainder)
-				col++
 			}
 		}
 	}
 
-	return builder.NewRecord(), nil
+	return builder.NewRecordBatch(), nil
 }
