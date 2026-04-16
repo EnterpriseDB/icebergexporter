@@ -1,2 +1,5 @@
 exclude:
+  # dist/ is a gitignored build artefact with its own go.mod. Scanning it
+  # produces false positives from stale dependencies that don't reflect the
+  # current source. The CI docker job scans the actual built image separately.
   - "./dist/**"

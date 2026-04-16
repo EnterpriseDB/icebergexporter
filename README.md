@@ -123,17 +123,29 @@ SET VARIABLE today = 'year=' || year(current_date)
 
 -- Query traces
 SELECT name, attr_service_name, duration_nano / 1e6 AS duration_ms
-FROM read_parquet('s3://otel-data/iceberg/otel_traces/data/' || getvariable('today') || '/*/*.parquet', hive_partitioning=true)
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_traces/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 
 -- Query logs
 SELECT severity_text, body, attr_service_name
-FROM read_parquet('s3://otel-data/iceberg/otel_logs/data/' || getvariable('today') || '/*/*.parquet', hive_partitioning=true)
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_logs/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 
 -- Query metrics
 SELECT metric_name, value_double, value_int, attr_service_name
-FROM read_parquet('s3://otel-data/iceberg/otel_metrics_gauge/data/' || getvariable('today') || '/*/*.parquet', hive_partitioning=true)
+FROM read_parquet(
+  's3://otel-data/iceberg/otel_metrics_gauge/data/'
+  || getvariable('today') || '/*/*.parquet',
+  hive_partitioning=true
+)
 LIMIT 10;
 ```
 
