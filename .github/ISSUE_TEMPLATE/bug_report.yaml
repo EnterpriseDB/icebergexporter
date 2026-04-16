@@ -1,0 +1,49 @@
+---
+name: Bug report
+description: Create a report to help us improve.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for opening a bug report for Iceberg Exporter.
+
+        Please do *NOT* ask support questions in Github issues.
+  - type: textarea
+    attributes:
+      label: What did you do?
+      description: Please provide steps for us to reproduce this issue.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What did you see?
+      description: Please describe what you saw instead, and under which circumstances.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What did you expect to see?
+      description: Please describe what you expected to see.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Iceberg Exporter version
+      description: Provide the version information of Iceberg Exporter here.
+      render: text
+      placeholder: |
+        e.g. iceberg-exporter, version 1.0.0 (branch: HEAD, revision: 26d89b4b0776fe4cd5a3656dfa520f119a375273)
+          build user:       root@37609b3a0a21
+          build date:       20201126-10:56:17
+          go version:       go1.15.5
+          platform:         linux/amd64
+  - type: textarea
+    attributes:
+      label: Iceberg Exporter configuration file
+      description: Insert relevant configuration here. Don't forget to remove secrets.
+      render: yaml
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Insert logs relevant to the issue here.
+      render: text
