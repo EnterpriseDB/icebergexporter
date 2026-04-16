@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   lint:
@@ -61,6 +62,25 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+  vulnerability-scan:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan source for vulnerabilities
+        uses: anchore/scan-action@v6
+        id: source-scan
+        with:
+          path: "."
+          fail-build: true
+          severity-cutoff: high
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.source-scan.outputs.sarif }}
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -71,3 +91,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t icebergexporter:ci .
+      - name: Scan Docker image for vulnerabilities
+        uses: anchore/scan-action@v6
+        id: image-scan
+        with:
+          image: "icebergexporter:ci"
+          fail-build: true
+          severity-cutoff: high
+      - name: Upload image SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.image-scan.outputs.sarif }}
