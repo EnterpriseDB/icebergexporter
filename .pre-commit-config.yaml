@@ -9,7 +9,7 @@ repos:
     hooks:
       - id: goimports-check
         name: goimports
-        entry: sh -c 'test -z "$(goimports -l -local github.com/enterprisedb/icebergexporter .)"'
+        entry: sh -c 'test -z "$(go run golang.org/x/tools/cmd/goimports@latest -l -local github.com/enterprisedb/icebergexporter .)"'
         language: system
         types: [go]
         pass_filenames: false
@@ -27,6 +27,7 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+        stages: [pre-push]
 
       - id: go-mod-tidy-check
         name: go mod tidy

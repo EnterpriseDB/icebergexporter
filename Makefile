@@ -24,7 +24,7 @@ tidy:
 
 check:
 	@which pre-commit > /dev/null 2>&1 || { echo "pre-commit not installed: brew install pre-commit"; exit 1; }
-	pre-commit run --all-files
+	pre-commit run --all-files --hook-stage pre-push
 
 cover:
 	go test -race -count=1 -coverprofile=coverage.out ./...
@@ -33,7 +33,7 @@ cover:
 
 install-hooks:
 	@which pre-commit > /dev/null 2>&1 || { echo "pre-commit not installed: brew install pre-commit"; exit 1; }
-	pre-commit install
+	pre-commit install --hook-type pre-commit --hook-type pre-push
 
 up:
 	docker compose -f example/docker-compose.yaml up --build -d
