@@ -5,9 +5,9 @@ RUN go install go.opentelemetry.io/collector/cmd/builder@v0.146.1
 WORKDIR /build
 COPY . .
 
-RUN builder --config=builder-config.yaml
+RUN CGO_ENABLED=0 builder --config=builder-config.yaml
 
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /build/dist/otelcol-iceberg /otelcol-iceberg
 
