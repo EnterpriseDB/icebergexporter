@@ -4,6 +4,8 @@
 package arrow
 
 import (
+	"encoding/hex"
+
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -70,10 +72,10 @@ func (c *TracesConverter) Convert(td ptrace.Traces) (arrow.RecordBatch, error) {
 
 				// Span fields
 				tid := span.TraceID()
-				builder.Field(col).(*array.StringBuilder).Append(hex(tid[:]))
+				builder.Field(col).(*array.StringBuilder).Append(hex.EncodeToString(tid[:]))
 				col++
 				sid := span.SpanID()
-				builder.Field(col).(*array.StringBuilder).Append(hex(sid[:]))
+				builder.Field(col).(*array.StringBuilder).Append(hex.EncodeToString(sid[:]))
 				col++
 				appendOptionalString(builder.Field(col), span.TraceState().AsRaw())
 				col++
@@ -82,7 +84,7 @@ func (c *TracesConverter) Convert(td ptrace.Traces) (arrow.RecordBatch, error) {
 				if psid.IsEmpty() {
 					builder.Field(col).(*array.StringBuilder).AppendNull()
 				} else {
-					builder.Field(col).(*array.StringBuilder).Append(hex(psid[:]))
+					builder.Field(col).(*array.StringBuilder).Append(hex.EncodeToString(psid[:]))
 				}
 				col++
 
@@ -179,8 +181,8 @@ func linksToJSON(links ptrace.SpanLinkSlice) string {
 		tid := l.TraceID()
 		sid := l.SpanID()
 		m := map[string]any{
-			"trace_id":                 hex(tid[:]),
-			"span_id":                  hex(sid[:]),
+			"trace_id":                 hex.EncodeToString(tid[:]),
+			"span_id":                  hex.EncodeToString(sid[:]),
 			"trace_state":              l.TraceState().AsRaw(),
 			"dropped_attributes_count": l.DroppedAttributesCount(),
 		}
@@ -216,14 +218,4 @@ func appendOptionalString(b array.Builder, val string) {
 	} else {
 		sb.Append(val)
 	}
-}
-
-func hex(b []byte) string {
-	const hextable = "0123456789abcdef"
-	dst := make([]byte, len(b)*2)
-	for i, v := range b {
-		dst[i*2] = hextable[v>>4]
-		dst[i*2+1] = hextable[v&0x0f]
-	}
-	return string(dst)
 }

@@ -4,6 +4,8 @@
 package arrow
 
 import (
+	"encoding/hex"
+
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -77,7 +79,7 @@ func (c *LogsConverter) Convert(ld plog.Logs) (arrow.RecordBatch, error) {
 				if tid.IsEmpty() {
 					builder.Field(col).(*array.StringBuilder).AppendNull()
 				} else {
-					builder.Field(col).(*array.StringBuilder).Append(hex(tid[:]))
+					builder.Field(col).(*array.StringBuilder).Append(hex.EncodeToString(tid[:]))
 				}
 				col++
 
@@ -85,7 +87,7 @@ func (c *LogsConverter) Convert(ld plog.Logs) (arrow.RecordBatch, error) {
 				if sid.IsEmpty() {
 					builder.Field(col).(*array.StringBuilder).AppendNull()
 				} else {
-					builder.Field(col).(*array.StringBuilder).Append(hex(sid[:]))
+					builder.Field(col).(*array.StringBuilder).Append(hex.EncodeToString(sid[:]))
 				}
 				col++
 
