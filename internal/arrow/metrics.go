@@ -4,6 +4,8 @@
 package arrow
 
 import (
+	"encoding/hex"
+
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -344,8 +346,8 @@ func exemplarsToJSON(exemplars pmetric.ExemplarSlice) string {
 		sid := e.SpanID()
 		m := map[string]any{
 			"time_unix_nano": int64(e.Timestamp()),
-			"trace_id":       hex(tid[:]),
-			"span_id":        hex(sid[:]),
+			"trace_id":       hex.EncodeToString(tid[:]),
+			"span_id":        hex.EncodeToString(sid[:]),
 		}
 		switch e.ValueType() {
 		case pmetric.ExemplarValueTypeDouble:
