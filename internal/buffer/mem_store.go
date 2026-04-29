@@ -41,16 +41,26 @@ func (m *memStore) Drain() ([]arrow.RecordBatch, int64, func(), error) {
 	m.active = nil
 	m.activeRows = 0
 
-	// Snapshot the slice header for the commit closure to discard exactly
-	// what was drained at this point. (Records are released by the caller.)
-	snapshot := m.draining
+	// Hand the caller their own refs (caller releases unconditionally —
+	// regardless of commit). memStore keeps its own refs in m.draining so
+	// failed flushes can re-drain.
+	snapshot := make([]arrow.RecordBatch, len(m.draining))
+	copy(snapshot, m.draining)
+	for _, rec := range snapshot {
+		rec.Retain()
+	}
 	rows := m.drainingRows
 
+	// Capture for the commit closure. flushMu serialisation guarantees no
+	// overlapping drain happens between Drain returning and commit, so this
+	// slice is stable.
+	drainedRefs := m.draining
+
 	commit := func() {
-		// flushMu serialisation guarantees no overlapping drain happened
-		// between Drain returning and commit being called, so the draining
-		// set still contains exactly snapshot.
-		_ = snapshot // kept in closure for clarity; caller releases the records
+		// On successful commit: release memStore's refs and clear draining.
+		for _, rec := range drainedRefs {
+			rec.Release()
+		}
 		m.draining = nil
 		m.drainingRows = 0
 	}

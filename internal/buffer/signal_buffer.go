@@ -92,8 +92,7 @@ func (b *SignalBuffer) FlushVia(op FlushOp) error {
 	b.mu.Unlock()
 
 	if len(records) == 0 {
-		// Empty drain — still call commit for symmetry (no-op for memStore;
-		// diskStore may want to clean up an empty rotated file).
+		// Empty drain — still call commit for symmetry (no-op).
 		b.mu.Lock()
 		commit()
 		b.sizeDrain = 0
@@ -104,20 +103,25 @@ func (b *SignalBuffer) FlushVia(op FlushOp) error {
 	parquetBytes, opErr := op(records, rows)
 
 	b.mu.Lock()
-	if opErr != nil {
-		// No commit. Records stay drainable; sizeDrain remains as set above.
-		b.mu.Unlock()
-		return opErr
+	if opErr == nil {
+		// Success: discard drained records from the store and zero the
+		// draining-side size estimate.
+		commit()
+		b.sizeDrain = 0
 	}
-
-	// Success: discard drained records from the store, release Arrow refs,
-	// and zero the draining-side size estimate.
-	commit()
-	b.sizeDrain = 0
+	// On failure, no commit; sizeDrain stays as set above so EstimatedSize
+	// continues to reflect the still-buffered records.
 	b.mu.Unlock()
 
+	// Records belong to the caller after Drain — release them unconditionally.
+	// memStore keeps its own refs internally for failed-flush re-drains;
+	// diskStore reads fresh records on every Drain.
 	for _, rec := range records {
 		rec.Release()
+	}
+
+	if opErr != nil {
+		return opErr
 	}
 
 	if parquetBytes > 0 {
