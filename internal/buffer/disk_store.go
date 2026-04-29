@@ -16,6 +16,8 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/gofrs/flock"
+	"go.uber.org/zap"
 )
 
 // sanitiseTableName makes a table name safe to use as a filesystem path
@@ -45,6 +47,7 @@ func sanitiseTableName(t string) string {
 const (
 	activeFilename     = "active.ipc"
 	pendingFilenameFmt = "pending-%06d.ipc"
+	dirLockFilename    = ".lock"
 )
 
 var pendingFilenameRE = regexp.MustCompile(`^pending-(\d+)\.ipc$`)
@@ -65,15 +68,20 @@ type pendingFile struct {
 //
 //	<dir>/active.ipc           — currently being written
 //	<dir>/pending-NNNNNN.ipc   — drained-but-not-committed records
+//	<dir>/.lock                — exclusive directory lock (flock)
 //
 // Crash recovery on construction: any orphaned active.ipc is renamed to a
 // fresh pending file, and existing pending files roll into the drained set so
 // the next Drain picks them up.
 //
 // Concurrency is provided by the enclosing SignalBuffer's mu and flushMu;
-// diskStore itself is not internally synchronized.
+// diskStore itself is not internally synchronised. Cross-process exclusion
+// is enforced by an exclusive flock on <dir>/.lock taken at construction
+// and held until Close.
 type diskStore struct {
-	dir string
+	dir    string
+	lock   *flock.Flock
+	logger *zap.Logger
 
 	activeFile   *os.File
 	activeWriter *ipc.Writer
@@ -89,20 +97,41 @@ type diskStore struct {
 }
 
 // newDiskStore creates a disk-backed record store rooted at dir. The directory
-// is created if missing. Any pre-existing active/pending files (e.g. from a
-// previous crashed run) are recovered into the drained set.
-func newDiskStore(dir string, alloc memory.Allocator) (*diskStore, error) {
+// is created if missing and an exclusive flock is acquired on <dir>/.lock to
+// prevent two processes from sharing the same spill directory. Any
+// pre-existing active/pending files (e.g. from a previous crashed run) are
+// recovered into the drained set.
+//
+// logger may be nil; if nil, no operational warnings are emitted.
+func newDiskStore(dir string, alloc memory.Allocator, logger *zap.Logger) (*diskStore, error) {
 	if alloc == nil {
 		alloc = memory.DefaultAllocator
+	}
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create spill dir %s: %w", dir, err)
 	}
+
+	lockPath := filepath.Join(dir, dirLockFilename)
+	lk := flock.New(lockPath)
+	locked, err := lk.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("acquire spill dir lock %s: %w", lockPath, err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("spill dir %s is locked by another process", dir)
+	}
+
 	s := &diskStore{
-		dir:   dir,
-		alloc: alloc,
+		dir:    dir,
+		lock:   lk,
+		alloc:  alloc,
+		logger: logger,
 	}
 	if err := s.recover(); err != nil {
+		_ = lk.Unlock()
 		return nil, fmt.Errorf("recover spill dir %s: %w", dir, err)
 	}
 	return s, nil
@@ -126,6 +155,9 @@ func (s *diskStore) recover() error {
 		name := entry.Name()
 		if name == activeFilename {
 			activeExists = true
+			continue
+		}
+		if name == dirLockFilename {
 			continue
 		}
 		m := pendingFilenameRE.FindStringSubmatch(name)
@@ -187,10 +219,33 @@ func (s *diskStore) Append(rec arrow.RecordBatch) error {
 	}
 
 	if err := s.activeWriter.Write(rec); err != nil {
+		// The writer is now in an undefined state. Try to preserve any
+		// records that were successfully written before this failure by
+		// rotating the active file to a pending file (truncated tails are
+		// tolerated by the reader). If rotation also fails, discard the
+		// active file entirely so the next Append starts clean.
+		s.handleWriteFailure()
 		return fmt.Errorf("write to active stream: %w", err)
 	}
 	s.activeRows += rec.NumRows()
 	return nil
+}
+
+// handleWriteFailure attempts to salvage the active stream after a Write
+// error. State is reset to "no active stream" on either path so subsequent
+// Append calls open a fresh file.
+func (s *diskStore) handleWriteFailure() {
+	if s.activeRows == 0 {
+		// Nothing successfully written; just drop the file.
+		s.closeActiveDiscarding()
+		return
+	}
+	if err := s.rotateActive(); err != nil {
+		s.logger.Warn("rotating poisoned active stream failed; discarding pending records",
+			zap.String("dir", s.dir),
+			zap.Error(err))
+		s.closeActiveDiscarding()
+	}
 }
 
 func (s *diskStore) openActive(schema *arrow.Schema) error {
@@ -239,12 +294,21 @@ func (s *diskStore) Drain() ([]arrow.RecordBatch, int64, func(), error) {
 	copy(snapshot, s.drainingFiles)
 
 	commit := func() {
-		for _, pf := range snapshot {
-			_ = os.Remove(pf.path) // best-effort; orphans recovered on next restart
-		}
+		// Clear in-memory state immediately so the store reflects the committed
+		// view; then delete files. Failures to remove a file are logged — the
+		// orphan would be picked up by recovery on next startup and could cause
+		// a duplicate flush, so this is operationally significant.
 		s.drainingFiles = nil
 		s.drainingRows = 0
 		s.drainingBytes = 0
+
+		for _, pf := range snapshot {
+			if err := os.Remove(pf.path); err != nil && !os.IsNotExist(err) {
+				s.logger.Error("failed to remove committed pending file; recovery may re-flush",
+					zap.String("path", pf.path),
+					zap.Error(err))
+			}
+		}
 	}
 
 	return allRecords, rows, commit, nil
@@ -311,6 +375,10 @@ func (s *diskStore) Close() {
 		// active.ipc remains on disk for recovery on next startup.
 	}
 	// drainingFiles remain on disk; recovery handles them next time.
+	if s.lock != nil {
+		_ = s.lock.Unlock()
+		s.lock = nil
+	}
 }
 
 func (s *diskStore) Metrics() StoreMetrics {

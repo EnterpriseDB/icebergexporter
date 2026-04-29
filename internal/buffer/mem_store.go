@@ -13,7 +13,7 @@ import "github.com/apache/arrow-go/v18/arrow"
 // for the next attempt.
 //
 // Concurrency is provided by the enclosing SignalBuffer: SignalBuffer's mu
-// guards individual operations and flushMu serializes drain/commit cycles, so
+// guards individual operations and flushMu serialises drain/commit cycles, so
 // at most one drain is in flight against this store at a time.
 type memStore struct {
 	active       []arrow.RecordBatch
@@ -51,7 +51,7 @@ func (m *memStore) Drain() ([]arrow.RecordBatch, int64, func(), error) {
 	}
 	rows := m.drainingRows
 
-	// Capture for the commit closure. flushMu serialization guarantees no
+	// Capture for the commit closure. flushMu serialisation guarantees no
 	// overlapping drain happens between Drain returning and commit, so this
 	// slice is stable.
 	drainedRefs := m.draining

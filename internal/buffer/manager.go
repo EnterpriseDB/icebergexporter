@@ -5,6 +5,7 @@ package buffer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -44,8 +45,11 @@ type StorageOptions struct {
 
 // ManagerOptions configures a Manager.
 type ManagerOptions struct {
-	// MaxSizeBytes triggers a synchronous flush when a single buffer's
-	// estimated size hits this threshold. Zero disables size-triggered flush.
+	// MaxSizeBytes is the hard cap on a single buffer's estimated size. Add
+	// triggers a synchronous flush before crossing this threshold; if the
+	// flush fails the Add is rejected so the buffer cannot exceed the cap.
+	// Zero disables the cap (buffer grows freely; only the time-triggered
+	// flush bounds it).
 	MaxSizeBytes int64
 
 	// FlushInterval is the period between time-triggered flushes.
@@ -73,8 +77,10 @@ type Manager struct {
 	logger    *zap.Logger
 	allocator memory.Allocator
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	startOnce sync.Once
+	startErr  error
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 // NewManager creates a buffer manager. Returns an error if the options are
@@ -116,18 +122,26 @@ func validateOptions(opts ManagerOptions) error {
 	return nil
 }
 
-// Start begins the background time-based flush goroutine and registers
-// telemetry callbacks.
+// Start registers telemetry callbacks and begins the background time-based
+// flush goroutine. Idempotent — subsequent calls return the first call's
+// error (or nil) without re-registering or re-spawning.
 func (m *Manager) Start() error {
-	if err := m.registerTelemetryCallbacks(); err != nil {
-		return fmt.Errorf("register telemetry callbacks: %w", err)
-	}
+	m.startOnce.Do(func() {
+		if err := m.registerTelemetryCallbacks(); err != nil {
+			// Best-effort cleanup of partial registrations: Telemetry's
+			// Shutdown unregisters whatever did register. Caller is expected
+			// to invoke that on the TelemetryBuilder when the exporter
+			// itself shuts down, so we don't double-shutdown here.
+			m.startErr = fmt.Errorf("register telemetry callbacks: %w", err)
+			return
+		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	m.done = make(chan struct{})
-	go m.flushLoop(ctx)
-	return nil
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		m.done = make(chan struct{})
+		go m.flushLoop(ctx)
+	})
+	return m.startErr
 }
 
 // Stop cancels the background flush goroutine, then drains all buffers.
@@ -141,23 +155,32 @@ func (m *Manager) Stop(ctx context.Context) error {
 	return m.flushAll(ctx)
 }
 
-// Add adds a record to the named table's buffer. If the buffer exceeds the
-// size threshold, a synchronous flush is triggered and any error is returned
-// to the caller (enabling OTel retry). Errors from the underlying store
-// (e.g. disk write failures for disk-backed buffers) are also propagated.
+// Add adds a record to the named table's buffer. If the post-Add size would
+// exceed MaxSizeBytes, a synchronous flush is triggered first; if that flush
+// fails, the record is rejected (not buffered) and the error is returned so
+// OTel can retry the whole batch without duplicating already-buffered data.
+//
+// Errors from the underlying store (e.g. disk write failures for disk-backed
+// buffers) are also propagated.
 func (m *Manager) Add(ctx context.Context, table string, rec arrow.RecordBatch) error {
 	buf, err := m.getOrCreateBuffer(table)
 	if err != nil {
 		return err
 	}
-	if err := buf.Add(rec); err != nil {
-		return err
-	}
 
 	if m.opts.MaxSizeBytes > 0 && buf.EstimatedSize() >= m.opts.MaxSizeBytes {
-		return m.flushBuffer(ctx, buf)
+		// At cap — flush synchronously to make room. If flush fails the
+		// caller's record is NOT buffered, so OTel retry won't duplicate.
+		if err := m.flushBuffer(ctx, buf); err != nil {
+			return fmt.Errorf("buffer at capacity and flush failed: %w", err)
+		}
+		// Post-flush, the buffer should be near-empty (commit ran). If a
+		// failure left records in draining and they are still over-cap, the
+		// flush would have returned an error above; reaching here means
+		// space was reclaimed.
 	}
-	return nil
+
+	return buf.Add(rec)
 }
 
 func (m *Manager) getOrCreateBuffer(table string) (*SignalBuffer, error) {
@@ -168,15 +191,19 @@ func (m *Manager) getOrCreateBuffer(table string) (*SignalBuffer, error) {
 		return buf, nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if buf, ok = m.buffers[table]; ok {
-		return buf, nil
-	}
-
+	// Construct the store outside the write lock — disk recovery can do
+	// significant I/O that we don't want serialising every Add on first use.
 	store, err := m.newStoreFor(table)
 	if err != nil {
 		return nil, fmt.Errorf("create store for table %q: %w", table, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.buffers[table]; ok {
+		// Lost the race; discard our new store and use the winner's.
+		store.Close()
+		return existing, nil
 	}
 	buf = newSignalBufferWithStore(table, store)
 	m.buffers[table] = buf
@@ -187,7 +214,7 @@ func (m *Manager) newStoreFor(table string) (recordStore, error) {
 	switch m.opts.Storage.Type {
 	case StorageDisk:
 		dir := filepath.Join(m.opts.Storage.Path, sanitiseTableName(table))
-		return newDiskStore(dir, m.allocator)
+		return newDiskStore(dir, m.allocator, m.logger.With(zap.String("table", table)))
 	default: // StorageMemory or empty
 		return newMemStore(), nil
 	}
@@ -257,48 +284,45 @@ func (m *Manager) flushLoop(ctx context.Context) {
 	}
 }
 
-// registerTelemetryCallbacks wires the four async gauge metrics. The
-// callbacks iterate buffers under m.mu and acquire each SignalBuffer's mu
-// briefly to read its current snapshot. Order matters: under no path is a
-// SignalBuffer.mu held while m.mu is taken, so no deadlock.
+// registerTelemetryCallbacks wires the four async gauge metrics. All four
+// registrations are attempted; partial successes are returned as a joined
+// error so the caller can decide whether to abort. The TelemetryBuilder's
+// own Shutdown unregisters whatever did register.
+//
+// The callbacks iterate buffers via snapshotBufferMetrics, which captures
+// the buffer slice under m.mu and then acquires each SignalBuffer.mu only
+// after releasing m.mu — keeping the lock order m.mu → buf.mu unidirectional.
 func (m *Manager) registerTelemetryCallbacks() error {
 	tb := m.opts.Telemetry
 	if tb == nil {
 		return nil
 	}
-	if err := tb.RegisterExporterIcebergBufferRowsCallback(func(_ context.Context, o metric.Int64Observer) error {
-		for _, snap := range m.snapshotBufferMetrics() {
-			o.Observe(snap.metrics.Rows, metric.WithAttributes(attribute.String("table", snap.table)))
-		}
-		return nil
-	}); err != nil {
-		return err
+
+	int64Reg := func(register func(metric.Int64Callback) error, get func(Metrics) int64) error {
+		return register(func(_ context.Context, o metric.Int64Observer) error {
+			for _, snap := range m.snapshotBufferMetrics() {
+				o.Observe(get(snap.metrics), metric.WithAttributes(attribute.String("table", snap.table)))
+			}
+			return nil
+		})
 	}
-	if err := tb.RegisterExporterIcebergBufferPendingFilesCallback(func(_ context.Context, o metric.Int64Observer) error {
-		for _, snap := range m.snapshotBufferMetrics() {
-			o.Observe(int64(snap.metrics.PendingFiles), metric.WithAttributes(attribute.String("table", snap.table)))
-		}
-		return nil
-	}); err != nil {
-		return err
+	float64Reg := func(register func(metric.Float64Callback) error, get func(Metrics) float64) error {
+		return register(func(_ context.Context, o metric.Float64Observer) error {
+			for _, snap := range m.snapshotBufferMetrics() {
+				o.Observe(get(snap.metrics), metric.WithAttributes(attribute.String("table", snap.table)))
+			}
+			return nil
+		})
 	}
-	if err := tb.RegisterExporterIcebergBufferPendingBytesCallback(func(_ context.Context, o metric.Int64Observer) error {
-		for _, snap := range m.snapshotBufferMetrics() {
-			o.Observe(snap.metrics.PendingBytes, metric.WithAttributes(attribute.String("table", snap.table)))
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if err := tb.RegisterExporterIcebergBufferPendingOldestAgeSecondsCallback(func(_ context.Context, o metric.Float64Observer) error {
-		for _, snap := range m.snapshotBufferMetrics() {
-			o.Observe(snap.metrics.OldestPendingAgeSeconds, metric.WithAttributes(attribute.String("table", snap.table)))
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	return nil
+
+	var errs []error
+	errs = append(errs,
+		int64Reg(tb.RegisterExporterIcebergBufferRowsCallback, func(m Metrics) int64 { return m.Rows }),
+		int64Reg(tb.RegisterExporterIcebergBufferPendingFilesCallback, func(m Metrics) int64 { return int64(m.PendingFiles) }),
+		int64Reg(tb.RegisterExporterIcebergBufferPendingBytesCallback, func(m Metrics) int64 { return m.PendingBytes }),
+		float64Reg(tb.RegisterExporterIcebergBufferPendingOldestAgeSecondsCallback, func(m Metrics) float64 { return m.OldestPendingAgeSeconds }),
+	)
+	return errors.Join(errs...)
 }
 
 // bufferMetricSnapshot pairs a table name with its current metrics snapshot.
@@ -312,21 +336,15 @@ type bufferMetricSnapshot struct {
 // order is m.mu → buf.mu, never the reverse.
 func (m *Manager) snapshotBufferMetrics() []bufferMetricSnapshot {
 	m.mu.RLock()
-	pairs := make([]struct {
-		table string
-		buf   *SignalBuffer
-	}, 0, len(m.buffers))
-	for table, buf := range m.buffers {
-		pairs = append(pairs, struct {
-			table string
-			buf   *SignalBuffer
-		}{table, buf})
+	bufs := make([]*SignalBuffer, 0, len(m.buffers))
+	for _, buf := range m.buffers {
+		bufs = append(bufs, buf)
 	}
 	m.mu.RUnlock()
 
-	snaps := make([]bufferMetricSnapshot, 0, len(pairs))
-	for _, p := range pairs {
-		snaps = append(snaps, bufferMetricSnapshot{table: p.table, metrics: p.buf.Metrics()})
+	snaps := make([]bufferMetricSnapshot, 0, len(bufs))
+	for _, buf := range bufs {
+		snaps = append(snaps, bufferMetricSnapshot{table: buf.Table(), metrics: buf.Metrics()})
 	}
 	return snaps
 }

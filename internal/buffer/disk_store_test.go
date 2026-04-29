@@ -13,11 +13,12 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"go.uber.org/zap/zaptest"
 )
 
 func mustNewDiskStore(t *testing.T, dir string) *diskStore {
 	t.Helper()
-	s, err := newDiskStore(dir, memory.DefaultAllocator)
+	s, err := newDiskStore(dir, memory.DefaultAllocator, zaptest.NewLogger(t))
 	if err != nil {
 		t.Fatalf("newDiskStore: %v", err)
 	}
@@ -66,17 +67,28 @@ func TestDiskStoreBasicAppendFlushCommit(t *testing.T) {
 		t.Error("buffer should be empty after successful flush")
 	}
 
+	// After commit, all data files should be gone (the .lock sentinel stays
+	// for the lifetime of the process holding the diskStore).
+	if data := dataFilesIn(t, dir); len(data) != 0 {
+		t.Errorf("expected no data files after commit, found: %v", data)
+	}
+}
+
+// dataFilesIn returns entries in dir excluding the .lock sentinel.
+func dataFilesIn(t *testing.T, dir string) []string {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		var names []string
-		for _, e := range entries {
-			names = append(names, e.Name())
+	var names []string
+	for _, e := range entries {
+		if e.Name() == dirLockFilename {
+			continue
 		}
-		t.Errorf("expected empty spill dir after commit, found: %v", names)
+		names = append(names, e.Name())
 	}
+	return names
 }
 
 func TestDiskStoreFailedFlushKeepsPendingFile(t *testing.T) {
@@ -166,9 +178,12 @@ func TestDiskStoreFailedFlushPlusNewAppendsCombineOnRetry(t *testing.T) {
 func TestDiskStoreRecoversPendingFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	// First "process": append, fail flush, leave a pending file.
+	// First "process": append, fail flush, leave a pending file. Close the
+	// store at the end of the scope to release the directory lock — that's
+	// what mimics process exit.
 	{
-		buf := newSignalBufferWithStore("test", mustNewDiskStore(t, dir))
+		store1 := mustNewDiskStore(t, dir)
+		buf := newSignalBufferWithStore("test", store1)
 		rec := makeTestRecord(11)
 		defer rec.Release()
 		if err := buf.Add(rec); err != nil {
@@ -177,6 +192,7 @@ func TestDiskStoreRecoversPendingFiles(t *testing.T) {
 		_, _ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 			return 0, errors.New("fail")
 		})
+		store1.Close()
 	}
 
 	if got := len(listPendingFiles(t, dir)); got != 1 {
@@ -313,4 +329,23 @@ func TestDiskStoreSequenceMonotonic(t *testing.T) {
 			t.Errorf("pending[%d]: expected %s, got %s", i, expected[i], filepath.Base(p))
 		}
 	}
+}
+
+func TestDiskStoreDirectoryLockExclusive(t *testing.T) {
+	dir := t.TempDir()
+	store1 := mustNewDiskStore(t, dir)
+	defer store1.Close()
+
+	// Second open against the same dir must fail — the lock is held.
+	if _, err := newDiskStore(dir, memory.DefaultAllocator, zaptest.NewLogger(t)); err == nil {
+		t.Fatal("expected second newDiskStore on locked dir to fail, got nil")
+	}
+
+	// After the first store closes, a new open must succeed.
+	store1.Close()
+	store2, err := newDiskStore(dir, memory.DefaultAllocator, zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatalf("re-open after close failed: %v", err)
+	}
+	store2.Close()
 }

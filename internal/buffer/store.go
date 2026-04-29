@@ -21,12 +21,12 @@ type StoreMetrics struct {
 // recordStore is the storage backend for a per-table buffer. Implementations
 // may keep records in memory (memStore) or persist them on disk (diskStore).
 //
-// The store is not internally synchronized; callers (SignalBuffer) provide
-// outer locking. Drain/commit cycles are serialized by SignalBuffer's flushMu
+// The store is not internally synchronised; callers (SignalBuffer) provide
+// outer locking. Drain/commit cycles are serialised by SignalBuffer's flushMu
 // — implementations may rely on at most one drain being in-flight at a time.
 type recordStore interface {
 	// Append adds a record. The store retains the record (refcount + 1) for
-	// in-memory backends; on-disk backends serialize the record and may
+	// in-memory backends; on-disk backends serialise the record and may
 	// release their reference immediately.
 	Append(rec arrow.RecordBatch) error
 

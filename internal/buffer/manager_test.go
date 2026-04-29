@@ -5,6 +5,7 @@ package buffer
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,6 +62,7 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 		return totalRows * 50, nil
 	}
 
+	// Threshold of 100 bytes; each rec(10) is 10 rows × 256 default bpr = 2560 estimated.
 	mgr := newTestManager(t, 100, flushFn)
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -74,13 +76,23 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 	rec := makeTestRecord(10)
 	defer rec.Release()
 
-	// 10 rows * 256 default bytes-per-row = 2560 > 100 threshold.
+	// First Add: buffer was empty (0 < 100 threshold), no pre-flush triggered.
 	if err := mgr.Add(context.Background(), "test_table", rec); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
+	if flushCount.Load() != 0 {
+		t.Errorf("expected 0 flushes after first Add (buffer was empty), got %d", flushCount.Load())
+	}
 
+	// Second Add: buffer now ≥ threshold, pre-Add flush should trigger before
+	// the new record is buffered.
+	rec2 := makeTestRecord(10)
+	defer rec2.Release()
+	if err := mgr.Add(context.Background(), "test_table", rec2); err != nil {
+		t.Fatalf("second Add failed: %v", err)
+	}
 	if flushCount.Load() != 1 {
-		t.Errorf("expected 1 size-triggered flush, got %d", flushCount.Load())
+		t.Errorf("expected 1 size-triggered flush after second Add, got %d", flushCount.Load())
 	}
 }
 
@@ -184,6 +196,67 @@ func TestManagerWithDiskStorage(t *testing.T) {
 
 	if flushed["otel_traces"] != 15 {
 		t.Errorf("expected 15 rows flushed, got %d", flushed["otel_traces"])
+	}
+}
+
+func TestManagerStartIsIdempotent(t *testing.T) {
+	flushFn := func(_ context.Context, _ string, _ []arrow.RecordBatch, _ int64) (int64, error) {
+		return 0, nil
+	}
+	mgr := newTestManager(t, 0, flushFn)
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("first Start failed: %v", err)
+	}
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("second Start should be no-op, got: %v", err)
+	}
+	// A third call too — definitely shouldn't double-register or double-spawn.
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("third Start should be no-op, got: %v", err)
+	}
+	if err := mgr.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+}
+
+func TestManagerAddBackpressuresWhenFlushFailsAtCap(t *testing.T) {
+	failErr := errors.New("synthetic flush failure")
+	flushFn := func(_ context.Context, _ string, _ []arrow.RecordBatch, _ int64) (int64, error) {
+		return 0, failErr
+	}
+	// Threshold of 100 bytes; first rec(10) fits, subsequent Adds hit the cap
+	// and trigger the failing flush — those Adds must be rejected, not buffered.
+	mgr := newTestManager(t, 100, flushFn)
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = mgr.Stop(context.Background()) }()
+
+	rec := makeTestRecord(10)
+	defer rec.Release()
+	if err := mgr.Add(context.Background(), "test_table", rec); err != nil {
+		t.Fatalf("first Add failed: %v", err)
+	}
+	rowsBefore := mgr.buffers["test_table"].Rows()
+	if rowsBefore != 10 {
+		t.Fatalf("expected 10 rows before failing-flush Add, got %d", rowsBefore)
+	}
+
+	rec2 := makeTestRecord(10)
+	defer rec2.Release()
+	err := mgr.Add(context.Background(), "test_table", rec2)
+	if err == nil {
+		t.Fatal("expected Add to fail when at-cap flush fails")
+	}
+	if !errors.Is(err, failErr) {
+		t.Fatalf("expected wrapped failErr, got %v", err)
+	}
+	// The rejected record must NOT be in the buffer (otherwise OTel retries
+	// would duplicate it). Existing 10 rows from the first Add remain because
+	// the flush failed without committing.
+	rowsAfter := mgr.buffers["test_table"].Rows()
+	if rowsAfter != 10 {
+		t.Errorf("expected 10 rows after rejected Add (no double-buffer), got %d", rowsAfter)
 	}
 }
 

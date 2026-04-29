@@ -15,7 +15,7 @@ import (
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 )
 
-// WriteParquet serializes an Arrow record to Parquet bytes using the given compression.
+// WriteParquet serialises an Arrow record to Parquet bytes using the given compression.
 func WriteParquet(rec arrow.RecordBatch, compression compress.Compression) ([]byte, error) {
 	var buf bytes.Buffer
 

@@ -9,19 +9,23 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
+// defaultBytesPerRow is the conservative pre-calibration estimate used when
+// no successful flush has happened yet to derive a per-row byte cost.
+const defaultBytesPerRow = 256
+
 // FlushOp is the caller-supplied function invoked by FlushVia with the
 // records to be flushed. It returns the actual Parquet bytes written (used
 // for bytes-per-row calibration) or an error.
 type FlushOp func(records []arrow.RecordBatch, rows int64) (parquetBytes int64, err error)
 
-// SignalBuffer accumulates Arrow records for a single table and tracks
-// estimated size. It calibrates bytes-per-row after the first Parquet write.
-// Storage is delegated to a recordStore (memStore by default; diskStore for
-// persistent buffers).
+// SignalBuffer accumulates Arrow records for a single table and tracks an
+// estimated byte size derived from store row count × calibrated
+// bytes-per-row. Storage is delegated to a recordStore (memStore by default;
+// diskStore for persistent buffers).
 //
 // Concurrency:
-//   - mu guards the size estimate and per-op store calls (Append, IsEmpty, Rows).
-//   - flushMu serializes drain/commit cycles. FlushVia holds flushMu for the
+//   - mu guards bytesPerRow and per-op store calls (Append, IsEmpty, Rows).
+//   - flushMu serialises drain/commit cycles. FlushVia holds flushMu for the
 //     entire drain → op → commit sequence, so at most one drain is in flight.
 //     Add can proceed concurrently with the op (it acquires only mu, not flushMu).
 type SignalBuffer struct {
@@ -30,8 +34,6 @@ type SignalBuffer struct {
 
 	table       string
 	store       recordStore
-	sizeActive  int64   // estimated bytes of records in store's active set
-	sizeDrain   int64   // estimated bytes of records in store's draining set
 	bytesPerRow float64 // calibrated after first flush; zero means uncalibrated
 }
 
@@ -51,87 +53,66 @@ func (b *SignalBuffer) Table() string {
 }
 
 // Add appends a record to the buffer. The record is retained by the store
-// (in-memory) or serialized to disk (disk-backed) before the call returns.
+// (in-memory) or serialised to disk (disk-backed) before the call returns.
 func (b *SignalBuffer) Add(rec arrow.RecordBatch) error {
-	numRows := rec.NumRows()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if err := b.store.Append(rec); err != nil {
-		return err
-	}
-
-	if b.bytesPerRow > 0 {
-		b.sizeActive += int64(float64(numRows) * b.bytesPerRow)
-	} else {
-		// Before calibration, use a rough estimate of 256 bytes per row
-		b.sizeActive += numRows * 256
-	}
-	return nil
+	return b.store.Append(rec)
 }
 
 // FlushVia drains the buffer and runs op against the drained records. On
 // op success the records are committed (discarded from the store, refs
 // released) and the bytes-per-row calibration is updated. On op failure or
 // drain failure, records remain drainable for retry. Concurrent FlushVia
-// calls on the same buffer serialize via flushMu.
+// calls on the same buffer serialise via flushMu.
 //
 // Returns the row count that was passed to op (zero for an empty drain) and
 // any drain or op error. The row count lets callers skip telemetry emission
 // when there was nothing to do.
-func (b *SignalBuffer) FlushVia(op FlushOp) (int64, error) {
+//
+// FlushVia is panic-safe: if op panics, drained records are still released
+// before the panic propagates.
+func (b *SignalBuffer) FlushVia(op FlushOp) (rows int64, err error) {
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
 
 	b.mu.Lock()
-	records, rows, commit, err := b.store.Drain()
-	if err != nil {
-		b.mu.Unlock()
-		return 0, err
-	}
-	// The store moved active records into draining as part of Drain; mirror
-	// that in our size accounting.
-	b.sizeDrain += b.sizeActive
-	b.sizeActive = 0
+	records, drainedRows, commit, drainErr := b.store.Drain()
 	b.mu.Unlock()
+	if drainErr != nil {
+		return 0, drainErr
+	}
+
+	// Records belong to the caller from this point — release on every exit
+	// path (success, failure, or panic from op).
+	defer func() {
+		for _, rec := range records {
+			rec.Release()
+		}
+	}()
 
 	if len(records) == 0 {
-		// Empty drain — still call commit for symmetry (no-op).
+		// Nothing drained — call commit for symmetry (no-op for both backends).
 		b.mu.Lock()
 		commit()
-		b.sizeDrain = 0
 		b.mu.Unlock()
 		return 0, nil
 	}
 
-	parquetBytes, opErr := op(records, rows)
+	parquetBytes, opErr := op(records, drainedRows)
 
-	b.mu.Lock()
 	if opErr == nil {
-		// Success: discard drained records from the store and zero the
-		// draining-side size estimate.
+		b.mu.Lock()
 		commit()
-		b.sizeDrain = 0
+		b.mu.Unlock()
+		if parquetBytes > 0 {
+			b.calibrate(parquetBytes, drainedRows)
+		}
+		return drainedRows, nil
 	}
-	// On failure, no commit; sizeDrain stays as set above so EstimatedSize
-	// continues to reflect the still-buffered records.
-	b.mu.Unlock()
-
-	// Records belong to the caller after Drain — release them unconditionally.
-	// memStore keeps its own refs internally for failed-flush re-drains;
-	// diskStore reads fresh records on every Drain.
-	for _, rec := range records {
-		rec.Release()
-	}
-
-	if opErr != nil {
-		return rows, opErr
-	}
-
-	if parquetBytes > 0 {
-		b.calibrate(parquetBytes, rows)
-	}
-	return rows, nil
+	// On failure, no commit; records stay in the store's draining set for
+	// the next attempt.
+	return drainedRows, opErr
 }
 
 // Metrics is a snapshot of per-buffer telemetry counters.
@@ -159,11 +140,22 @@ func (b *SignalBuffer) Metrics() Metrics {
 	}
 }
 
-// EstimatedSize returns the estimated buffer size in bytes (active + drained-but-not-committed).
+// EstimatedSize returns the estimated total buffer size in bytes (active +
+// drained-but-not-committed records). Computed from the store's row count
+// times the calibrated bytes-per-row, so disk-recovered records contribute.
 func (b *SignalBuffer) EstimatedSize() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.sizeActive + b.sizeDrain
+	return b.estimatedSizeLocked()
+}
+
+// estimatedSizeLocked computes the size estimate. Caller must hold mu.
+func (b *SignalBuffer) estimatedSizeLocked() int64 {
+	rows := b.store.Rows()
+	if b.bytesPerRow > 0 {
+		return int64(float64(rows) * b.bytesPerRow)
+	}
+	return rows * defaultBytesPerRow
 }
 
 // Rows returns the total number of buffered rows.
