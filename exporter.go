@@ -103,12 +103,18 @@ func (e *icebergExporter) start(ctx context.Context, host component.Host) error 
 	e.writer.RegisterSchema(iarrow.TableSummary, iarrow.SummarySchema(metricsPromoted))
 
 	// Create buffer manager
-	e.bufferMgr = buffer.NewManager(
-		e.cfg.Buffer.MaxSizeBytes,
-		e.cfg.Buffer.FlushInterval,
-		e.writer.Flush,
-		e.logger,
-	)
+	bufMgr, err := buffer.NewManager(buffer.ManagerOptions{
+		MaxSizeBytes:  int64(e.cfg.Buffer.MaxSize),
+		FlushInterval: e.cfg.Buffer.FlushInterval,
+		Storage: buffer.StorageOptions{
+			Type: buffer.StorageType(e.cfg.Buffer.Storage.Type),
+			Path: e.cfg.Buffer.Storage.Path,
+		},
+	}, e.writer.Flush, e.logger)
+	if err != nil {
+		return fmt.Errorf("create buffer manager: %w", err)
+	}
+	e.bufferMgr = bufMgr
 	e.bufferMgr.Start()
 
 	e.logger.Info("iceberg exporter started",

@@ -12,11 +12,36 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
+
+// sanitiseTableName makes a table name safe to use as a filesystem path
+// component. Characters outside [A-Za-z0-9_-] are replaced with '_'. OTel
+// table names (otel_traces, otel_metrics_gauge, etc.) are already safe;
+// this is defensive against future naming conventions.
+func sanitiseTableName(t string) string {
+	if t == "" {
+		return "_"
+	}
+	var b strings.Builder
+	b.Grow(len(t))
+	for _, r := range t {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
 
 const (
 	activeFilename     = "active.ipc"

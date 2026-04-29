@@ -13,6 +13,18 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+func newTestManager(t *testing.T, maxSize int64, flushFn FlushFunc) *Manager {
+	t.Helper()
+	mgr, err := NewManager(ManagerOptions{
+		MaxSizeBytes:  maxSize,
+		FlushInterval: time.Hour,
+	}, flushFn, zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	return mgr
+}
+
 func TestManagerAddAndFlush(t *testing.T) {
 	var flushCount atomic.Int32
 	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
@@ -20,8 +32,7 @@ func TestManagerAddAndFlush(t *testing.T) {
 		return totalRows * 50, nil
 	}
 
-	logger := zaptest.NewLogger(t)
-	mgr := NewManager(0, time.Hour, flushFn, logger) // size=0 means no size-triggered flush
+	mgr := newTestManager(t, 0, flushFn) // size=0 means no size-triggered flush
 	mgr.Start()
 	defer func() {
 		if err := mgr.Stop(context.Background()); err != nil {
@@ -36,7 +47,6 @@ func TestManagerAddAndFlush(t *testing.T) {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	// No flush should have happened (size threshold disabled)
 	if flushCount.Load() != 0 {
 		t.Errorf("expected 0 flushes, got %d", flushCount.Load())
 	}
@@ -49,9 +59,7 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 		return totalRows * 50, nil
 	}
 
-	logger := zaptest.NewLogger(t)
-	// Set very low size threshold to trigger flush
-	mgr := NewManager(100, time.Hour, flushFn, logger)
+	mgr := newTestManager(t, 100, flushFn)
 	mgr.Start()
 	defer func() {
 		if err := mgr.Stop(context.Background()); err != nil {
@@ -62,7 +70,7 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 	rec := makeTestRecord(10)
 	defer rec.Release()
 
-	// This should trigger a size-based flush (10 rows * 256 default = 2560 > 100)
+	// 10 rows * 256 default bytes-per-row = 2560 > 100 threshold.
 	if err := mgr.Add(context.Background(), "test_table", rec); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
@@ -79,8 +87,7 @@ func TestManagerStopDrains(t *testing.T) {
 		return totalRows * 50, nil
 	}
 
-	logger := zaptest.NewLogger(t)
-	mgr := NewManager(0, time.Hour, flushFn, logger) // No auto-flush
+	mgr := newTestManager(t, 0, flushFn)
 	mgr.Start()
 
 	rec := makeTestRecord(42)
@@ -90,7 +97,6 @@ func TestManagerStopDrains(t *testing.T) {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	// Stop should drain
 	if err := mgr.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop failed: %v", err)
 	}
@@ -107,8 +113,7 @@ func TestManagerMultipleTables(t *testing.T) {
 		return totalRows * 50, nil
 	}
 
-	logger := zaptest.NewLogger(t)
-	mgr := NewManager(0, time.Hour, flushFn, logger)
+	mgr := newTestManager(t, 0, flushFn)
 	mgr.Start()
 
 	rec1 := makeTestRecord(10)
@@ -132,5 +137,87 @@ func TestManagerMultipleTables(t *testing.T) {
 	}
 	if flushed["logs"] != 20 {
 		t.Errorf("expected 20 log rows, got %d", flushed["logs"])
+	}
+}
+
+func TestManagerWithDiskStorage(t *testing.T) {
+	dir := t.TempDir()
+	flushed := make(map[string]int64)
+	flushFn := func(ctx context.Context, table string, records []arrow.RecordBatch, totalRows int64) (int64, error) {
+		flushed[table] += totalRows
+		return totalRows * 50, nil
+	}
+
+	mgr, err := NewManager(ManagerOptions{
+		MaxSizeBytes:  0,
+		FlushInterval: time.Hour,
+		Storage: StorageOptions{
+			Type: StorageDisk,
+			Path: dir,
+		},
+	}, flushFn, zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatalf("NewManager with disk storage: %v", err)
+	}
+	mgr.Start()
+
+	rec := makeTestRecord(15)
+	defer rec.Release()
+
+	if err := mgr.Add(context.Background(), "otel_traces", rec); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	if err := mgr.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	if flushed["otel_traces"] != 15 {
+		t.Errorf("expected 15 rows flushed, got %d", flushed["otel_traces"])
+	}
+}
+
+func TestManagerRejectsInvalidOptions(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	flushFn := func(_ context.Context, _ string, _ []arrow.RecordBatch, _ int64) (int64, error) {
+		return 0, nil
+	}
+
+	cases := []struct {
+		name string
+		opts ManagerOptions
+	}{
+		{
+			name: "negative max size",
+			opts: ManagerOptions{MaxSizeBytes: -1, FlushInterval: time.Hour},
+		},
+		{
+			name: "negative flush interval",
+			opts: ManagerOptions{MaxSizeBytes: 0, FlushInterval: -time.Second},
+		},
+		{
+			name: "disk without path",
+			opts: ManagerOptions{
+				MaxSizeBytes:  0,
+				FlushInterval: time.Hour,
+				Storage:       StorageOptions{Type: StorageDisk},
+			},
+		},
+		{
+			name: "unknown storage type",
+			opts: ManagerOptions{
+				MaxSizeBytes:  0,
+				FlushInterval: time.Hour,
+				Storage:       StorageOptions{Type: "s3"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewManager(tc.opts, flushFn, logger); err == nil {
+				t.Errorf("expected error for %s, got nil", tc.name)
+			}
+		})
 	}
 }
