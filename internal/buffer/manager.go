@@ -60,10 +60,13 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 // Add adds a record to the named table's buffer. If the buffer exceeds the
 // size threshold, a synchronous flush is triggered and any error is returned
-// to the caller (enabling OTel retry).
+// to the caller (enabling OTel retry). Errors from the underlying store
+// (e.g. disk write failures for disk-backed buffers) are also propagated.
 func (m *Manager) Add(ctx context.Context, table string, rec arrow.RecordBatch) error {
 	buf := m.getOrCreateBuffer(table)
-	buf.Add(rec)
+	if err := buf.Add(rec); err != nil {
+		return err
+	}
 
 	if m.maxSizeBytes > 0 && buf.EstimatedSize() >= m.maxSizeBytes {
 		return m.flushBuffer(ctx, buf)
@@ -91,27 +94,9 @@ func (m *Manager) getOrCreateBuffer(table string) *SignalBuffer {
 }
 
 func (m *Manager) flushBuffer(ctx context.Context, buf *SignalBuffer) error {
-	records, rows := buf.Drain()
-	if len(records) == 0 {
-		return nil
-	}
-
-	parquetBytes, err := m.flushFn(ctx, buf.Table(), records, rows)
-	if err != nil {
-		// Re-append on failure so data isn't lost (don't release records).
-		buf.Reappend(records)
-		return err
-	}
-
-	// Release records only after a successful flush.
-	for _, rec := range records {
-		rec.Release()
-	}
-
-	if parquetBytes > 0 {
-		buf.Calibrate(parquetBytes, rows)
-	}
-	return nil
+	return buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
+		return m.flushFn(ctx, buf.Table(), records, rows)
+	})
 }
 
 func (m *Manager) flushAll(ctx context.Context) error {

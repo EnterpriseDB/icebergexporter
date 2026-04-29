@@ -20,11 +20,12 @@ OTel Collector pipeline
 
 Signals are written to 7 tables:
 
-| Signal  | Table(s) |
-|---------|----------|
-| Traces  | `otel_traces` |
-| Logs    | `otel_logs` |
-| Metrics | `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exp_histogram`, `otel_metrics_summary` |
+| Signal   | Table(s) |
+|----------|----------|
+| Traces   | `otel_traces` |
+| Logs     | `otel_logs` |
+| Metrics  | `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exp_histogram`, `otel_metrics_summary` |
+| Profiles | `in progress` |
 
 Each table is partitioned by time on its timestamp column
 (`start_time_unix_nano` for traces, `time_unix_nano` for logs and metrics) using
@@ -299,6 +300,8 @@ one lands.
   the Iceberg tables. Use an external process such as
   [pyiceberg](https://py.iceberg.apache.org/),
   Spark (`CALL rewrite_data_files`), or Trino for periodic compaction.
+- **Telemetry signals not fully implemented**
+  The exporter doesn't have a full set of telemetry signals.
 
 ---
 
