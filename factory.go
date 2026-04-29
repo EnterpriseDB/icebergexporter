@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //go:generate mdatagen metadata.yaml
+//go:generate go run golang.org/x/tools/cmd/goimports@latest -w -local github.com/enterprisedb/icebergexporter .
 
 package icebergexporter
 

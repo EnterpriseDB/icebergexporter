@@ -41,14 +41,14 @@ func TestByteSizeUnmarshalText(t *testing.T) {
 		{input: "0", want: 0},
 		{input: "1024", want: 1024},
 		{input: "134217728", want: 128 * 1024 * 1024},
-		{input: "1K", want: 1000},                   // SI
-		{input: "1KB", want: 1000},                  // SI explicit
-		{input: "1KiB", want: 1024},                 // IEC
-		{input: "1Mi", want: 1024 * 1024},           // IEC short
-		{input: "128Mi", want: 128 * 1024 * 1024},   // IEC short
-		{input: "1Gi", want: 1024 * 1024 * 1024},    // IEC short
-		{input: "1G", want: 1000 * 1000 * 1000},     // SI
-		{input: "1GiB", want: 1024 * 1024 * 1024},   // IEC explicit
+		{input: "1K", want: 1000},                    // SI
+		{input: "1KB", want: 1000},                   // SI explicit
+		{input: "1KiB", want: 1024},                  // IEC
+		{input: "1Mi", want: 1024 * 1024},            // IEC short
+		{input: "128Mi", want: 128 * 1024 * 1024},    // IEC short
+		{input: "1Gi", want: 1024 * 1024 * 1024},     // IEC short
+		{input: "1G", want: 1000 * 1000 * 1000},      // SI
+		{input: "1GiB", want: 1024 * 1024 * 1024},    // IEC explicit
 		{input: "  1Gi  ", want: 1024 * 1024 * 1024}, // whitespace tolerated
 		{input: "garbage", wantErr: true},
 		{input: "-5", want: -5}, // raw negative integer accepted (Validate catches it)

@@ -33,7 +33,9 @@ func TestManagerAddAndFlush(t *testing.T) {
 	}
 
 	mgr := newTestManager(t, 0, flushFn) // size=0 means no size-triggered flush
-	mgr.Start()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	defer func() {
 		if err := mgr.Stop(context.Background()); err != nil {
 			t.Fatalf("Stop failed: %v", err)
@@ -60,7 +62,9 @@ func TestManagerSizeTriggeredFlush(t *testing.T) {
 	}
 
 	mgr := newTestManager(t, 100, flushFn)
-	mgr.Start()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	defer func() {
 		if err := mgr.Stop(context.Background()); err != nil {
 			t.Fatalf("Stop failed: %v", err)
@@ -88,7 +92,9 @@ func TestManagerStopDrains(t *testing.T) {
 	}
 
 	mgr := newTestManager(t, 0, flushFn)
-	mgr.Start()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	rec := makeTestRecord(42)
 	defer rec.Release()
@@ -114,7 +120,9 @@ func TestManagerMultipleTables(t *testing.T) {
 	}
 
 	mgr := newTestManager(t, 0, flushFn)
-	mgr.Start()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	rec1 := makeTestRecord(10)
 	defer rec1.Release()
@@ -159,7 +167,9 @@ func TestManagerWithDiskStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager with disk storage: %v", err)
 	}
-	mgr.Start()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	rec := makeTestRecord(15)
 	defer rec.Release()

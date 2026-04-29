@@ -304,7 +304,7 @@ func (m *Manager) registerTelemetryCallbacks() error {
 // bufferMetricSnapshot pairs a table name with its current metrics snapshot.
 type bufferMetricSnapshot struct {
 	table   string
-	metrics BufferMetrics
+	metrics Metrics
 }
 
 // snapshotBufferMetrics returns a per-buffer snapshot of telemetry counters.

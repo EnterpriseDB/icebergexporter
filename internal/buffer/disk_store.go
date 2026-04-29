@@ -4,9 +4,7 @@
 package buffer
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,7 +71,7 @@ type pendingFile struct {
 // the next Drain picks them up.
 //
 // Concurrency is provided by the enclosing SignalBuffer's mu and flushMu;
-// diskStore itself is not internally synchronised.
+// diskStore itself is not internally synchronized.
 type diskStore struct {
 	dir string
 
@@ -349,9 +347,8 @@ func readIPCFile(path string, alloc memory.Allocator) ([]arrow.RecordBatch, erro
 		rec.Retain() // outlive reader.Release
 		records = append(records, rec)
 	}
-	if err := reader.Err(); err != nil && !errors.Is(err, io.EOF) {
-		// Truncated tail — accept the prefix we successfully read.
-	}
+	// Truncated tail (e.g. crash mid-write) is tolerated; accept the prefix.
+	_ = reader.Err()
 	return records, nil
 }
 
@@ -372,8 +369,7 @@ func countRowsInIPC(path string) (int64, error) {
 	for reader.Next() {
 		rows += reader.RecordBatch().NumRows()
 	}
-	if err := reader.Err(); err != nil && !errors.Is(err, io.EOF) {
-		// Truncated — return what we got.
-	}
+	// Truncated tail is tolerated; return what we counted.
+	_ = reader.Err()
 	return rows, nil
 }

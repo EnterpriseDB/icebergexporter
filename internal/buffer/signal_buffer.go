@@ -21,7 +21,7 @@ type FlushOp func(records []arrow.RecordBatch, rows int64) (parquetBytes int64, 
 //
 // Concurrency:
 //   - mu guards the size estimate and per-op store calls (Append, IsEmpty, Rows).
-//   - flushMu serialises drain/commit cycles. FlushVia holds flushMu for the
+//   - flushMu serializes drain/commit cycles. FlushVia holds flushMu for the
 //     entire drain → op → commit sequence, so at most one drain is in flight.
 //     Add can proceed concurrently with the op (it acquires only mu, not flushMu).
 type SignalBuffer struct {
@@ -51,7 +51,7 @@ func (b *SignalBuffer) Table() string {
 }
 
 // Add appends a record to the buffer. The record is retained by the store
-// (in-memory) or serialised to disk (disk-backed) before the call returns.
+// (in-memory) or serialized to disk (disk-backed) before the call returns.
 func (b *SignalBuffer) Add(rec arrow.RecordBatch) error {
 	numRows := rec.NumRows()
 	b.mu.Lock()
@@ -74,7 +74,7 @@ func (b *SignalBuffer) Add(rec arrow.RecordBatch) error {
 // op success the records are committed (discarded from the store, refs
 // released) and the bytes-per-row calibration is updated. On op failure or
 // drain failure, records remain drainable for retry. Concurrent FlushVia
-// calls on the same buffer serialise via flushMu.
+// calls on the same buffer serialize via flushMu.
 //
 // Returns the row count that was passed to op (zero for an empty drain) and
 // any drain or op error. The row count lets callers skip telemetry emission
@@ -134,8 +134,8 @@ func (b *SignalBuffer) FlushVia(op FlushOp) (int64, error) {
 	return rows, nil
 }
 
-// BufferMetrics is a snapshot of per-buffer telemetry counters.
-type BufferMetrics struct {
+// Metrics is a snapshot of per-buffer telemetry counters.
+type Metrics struct {
 	// Rows is the current total row count (active + drained-but-not-committed).
 	Rows int64
 	// PendingFiles, PendingBytes, OldestPendingAgeSeconds are populated only
@@ -147,11 +147,11 @@ type BufferMetrics struct {
 
 // Metrics returns a snapshot of the buffer's telemetry counters. Safe to call
 // concurrently with Add/FlushVia.
-func (b *SignalBuffer) Metrics() BufferMetrics {
+func (b *SignalBuffer) Metrics() Metrics {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	sm := b.store.Metrics()
-	return BufferMetrics{
+	return Metrics{
 		Rows:                    b.store.Rows(),
 		PendingFiles:            sm.PendingFiles,
 		PendingBytes:            sm.PendingBytes,
