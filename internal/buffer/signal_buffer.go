@@ -75,7 +75,11 @@ func (b *SignalBuffer) Add(rec arrow.RecordBatch) error {
 // released) and the bytes-per-row calibration is updated. On op failure or
 // drain failure, records remain drainable for retry. Concurrent FlushVia
 // calls on the same buffer serialise via flushMu.
-func (b *SignalBuffer) FlushVia(op FlushOp) error {
+//
+// Returns the row count that was passed to op (zero for an empty drain) and
+// any drain or op error. The row count lets callers skip telemetry emission
+// when there was nothing to do.
+func (b *SignalBuffer) FlushVia(op FlushOp) (int64, error) {
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
 
@@ -83,7 +87,7 @@ func (b *SignalBuffer) FlushVia(op FlushOp) error {
 	records, rows, commit, err := b.store.Drain()
 	if err != nil {
 		b.mu.Unlock()
-		return err
+		return 0, err
 	}
 	// The store moved active records into draining as part of Drain; mirror
 	// that in our size accounting.
@@ -97,7 +101,7 @@ func (b *SignalBuffer) FlushVia(op FlushOp) error {
 		commit()
 		b.sizeDrain = 0
 		b.mu.Unlock()
-		return nil
+		return 0, nil
 	}
 
 	parquetBytes, opErr := op(records, rows)
@@ -121,13 +125,38 @@ func (b *SignalBuffer) FlushVia(op FlushOp) error {
 	}
 
 	if opErr != nil {
-		return opErr
+		return rows, opErr
 	}
 
 	if parquetBytes > 0 {
 		b.calibrate(parquetBytes, rows)
 	}
-	return nil
+	return rows, nil
+}
+
+// BufferMetrics is a snapshot of per-buffer telemetry counters.
+type BufferMetrics struct {
+	// Rows is the current total row count (active + drained-but-not-committed).
+	Rows int64
+	// PendingFiles, PendingBytes, OldestPendingAgeSeconds are populated only
+	// for disk-backed buffers; in-memory buffers always report zeros.
+	PendingFiles            int
+	PendingBytes            int64
+	OldestPendingAgeSeconds float64
+}
+
+// Metrics returns a snapshot of the buffer's telemetry counters. Safe to call
+// concurrently with Add/FlushVia.
+func (b *SignalBuffer) Metrics() BufferMetrics {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sm := b.store.Metrics()
+	return BufferMetrics{
+		Rows:                    b.store.Rows(),
+		PendingFiles:            sm.PendingFiles,
+		PendingBytes:            sm.PendingBytes,
+		OldestPendingAgeSeconds: sm.OldestPendingAgeSeconds,
+	}
 }
 
 // EstimatedSize returns the estimated buffer size in bytes (active + drained-but-not-committed).

@@ -88,3 +88,9 @@ func (m *memStore) Close() {
 	m.activeRows = 0
 	m.drainingRows = 0
 }
+
+// Metrics on memStore always reports zeros — there are no pending files for
+// the in-memory backend.
+func (m *memStore) Metrics() StoreMetrics {
+	return StoreMetrics{}
+}

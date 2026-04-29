@@ -16,12 +16,14 @@ import (
 	iarrow "github.com/enterprisedb/icebergexporter/internal/arrow"
 	"github.com/enterprisedb/icebergexporter/internal/buffer"
 	"github.com/enterprisedb/icebergexporter/internal/iceberg"
+	"github.com/enterprisedb/icebergexporter/internal/metadata"
 	"github.com/enterprisedb/icebergexporter/internal/writer"
 )
 
 type icebergExporter struct {
-	cfg    *Config
-	logger *zap.Logger
+	cfg       *Config
+	logger    *zap.Logger
+	telemetry component.TelemetrySettings
 
 	tracesConv  *iarrow.TracesConverter
 	logsConv    *iarrow.LogsConverter
@@ -30,12 +32,14 @@ type icebergExporter struct {
 	bufferMgr *buffer.Manager
 	writer    *writer.Writer
 	catalog   iceberg.Catalog
+	tb        *metadata.TelemetryBuilder
 }
 
 func newExporter(cfg *Config, telemetry component.TelemetrySettings) *icebergExporter {
 	return &icebergExporter{
-		cfg:    cfg,
-		logger: telemetry.Logger,
+		cfg:       cfg,
+		logger:    telemetry.Logger,
+		telemetry: telemetry,
 	}
 }
 
@@ -102,6 +106,14 @@ func (e *icebergExporter) start(ctx context.Context, host component.Host) error 
 	e.writer.RegisterSchema(iarrow.TableExpHistogram, iarrow.ExpHistogramSchema(metricsPromoted))
 	e.writer.RegisterSchema(iarrow.TableSummary, iarrow.SummarySchema(metricsPromoted))
 
+	// Create the telemetry builder — gives us typed instruments backed by the
+	// collector's MeterProvider.
+	tb, err := metadata.NewTelemetryBuilder(e.telemetry)
+	if err != nil {
+		return fmt.Errorf("create telemetry builder: %w", err)
+	}
+	e.tb = tb
+
 	// Create buffer manager
 	bufMgr, err := buffer.NewManager(buffer.ManagerOptions{
 		MaxSizeBytes:  int64(e.cfg.Buffer.MaxSize),
@@ -110,12 +122,15 @@ func (e *icebergExporter) start(ctx context.Context, host component.Host) error 
 			Type: buffer.StorageType(e.cfg.Buffer.Storage.Type),
 			Path: e.cfg.Buffer.Storage.Path,
 		},
+		Telemetry: tb,
 	}, e.writer.Flush, e.logger)
 	if err != nil {
 		return fmt.Errorf("create buffer manager: %w", err)
 	}
 	e.bufferMgr = bufMgr
-	e.bufferMgr.Start()
+	if err := e.bufferMgr.Start(); err != nil {
+		return fmt.Errorf("start buffer manager: %w", err)
+	}
 
 	e.logger.Info("iceberg exporter started",
 		zap.String("endpoint", e.cfg.Storage.Endpoint),
@@ -132,6 +147,9 @@ func (e *icebergExporter) shutdown(ctx context.Context) error {
 		if err := e.bufferMgr.Stop(ctx); err != nil {
 			e.logger.Error("error draining buffers", zap.Error(err))
 		}
+	}
+	if e.tb != nil {
+		e.tb.Shutdown()
 	}
 	if e.catalog != nil {
 		if err := e.catalog.Close(); err != nil {

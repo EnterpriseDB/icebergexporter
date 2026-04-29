@@ -47,7 +47,7 @@ func TestSignalBufferAddState(t *testing.T) {
 	}
 
 	// Drain via FlushVia with a successful op so cleanup runs.
-	if err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
 		if len(records) != 1 {
 			t.Errorf("expected 1 record in op, got %d", len(records))
 		}
@@ -73,7 +73,7 @@ func TestSignalBufferFlushViaSuccess(t *testing.T) {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	if err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
 		if rows != 5 {
 			t.Errorf("expected 5 rows, got %d", rows)
 		}
@@ -104,7 +104,7 @@ func TestSignalBufferFlushViaFailureRetry(t *testing.T) {
 
 	// First flush fails — records must remain drainable.
 	failErr := errors.New("simulated flush failure")
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		return 0, failErr
 	}); !errors.Is(err, failErr) {
 		t.Fatalf("expected wrapped failErr, got %v", err)
@@ -130,7 +130,7 @@ func TestSignalBufferFlushViaFailureRetry(t *testing.T) {
 	}
 
 	// Retry flush succeeds — should see all 10 rows.
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
 		if rows != 10 {
 			t.Errorf("retry expected 10 rows, got %d", rows)
 		}
@@ -155,7 +155,7 @@ func TestSignalBufferCalibration(t *testing.T) {
 	defaultSize := buf.EstimatedSize()
 
 	// First flush calibrates: 5000 bytes for 100 rows = 50 bytes/row.
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		return 5000, nil
 	}); err != nil {
 		t.Fatalf("FlushVia failed: %v", err)
@@ -172,7 +172,7 @@ func TestSignalBufferCalibration(t *testing.T) {
 	}
 
 	// Drain leftover.
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		return 0, nil
 	}); err != nil {
 		t.Fatalf("cleanup FlushVia failed: %v", err)
@@ -183,7 +183,7 @@ func TestSignalBufferEmptyFlushViaIsNoop(t *testing.T) {
 	buf := NewSignalBuffer("test")
 
 	called := false
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		called = true
 		return 0, nil
 	}); err != nil {

@@ -5,6 +5,19 @@ package buffer
 
 import "github.com/apache/arrow-go/v18/arrow"
 
+// StoreMetrics captures counters that the buffer exposes for telemetry.
+// Only the disk-backed store reports non-zero values; in-memory stores
+// have no pending files concept.
+type StoreMetrics struct {
+	// PendingFiles is the number of disk-backed pending files awaiting commit.
+	PendingFiles int
+	// PendingBytes is the total disk bytes across pending files.
+	PendingBytes int64
+	// OldestPendingAgeSeconds is the age of the oldest pending file. Zero when
+	// no pending files exist or for in-memory stores.
+	OldestPendingAgeSeconds float64
+}
+
 // recordStore is the storage backend for a per-table buffer. Implementations
 // may keep records in memory (memStore) or persist them on disk (diskStore).
 //
@@ -39,4 +52,8 @@ type recordStore interface {
 	// Close releases any resources held by the store. After Close, further
 	// calls are undefined.
 	Close()
+
+	// Metrics returns a snapshot of disk-backed store counters for telemetry.
+	// In-memory stores return a zero-valued StoreMetrics.
+	Metrics() StoreMetrics
 }

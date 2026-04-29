@@ -12,7 +12,11 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
+
+	"github.com/enterprisedb/icebergexporter/internal/metadata"
 )
 
 // FlushFunc is called when a buffer needs flushing. It receives the table name
@@ -54,15 +58,19 @@ type ManagerOptions struct {
 	// when reading records back from IPC streams. Optional; defaults to
 	// memory.DefaultAllocator.
 	Allocator memory.Allocator
+
+	// Telemetry is the optional generated telemetry builder used to emit
+	// component metrics. When nil, the Manager runs without metrics.
+	Telemetry *metadata.TelemetryBuilder
 }
 
 // Manager implements a size+time hybrid buffer manager with per-table buffers.
 type Manager struct {
-	mu       sync.RWMutex
-	buffers  map[string]*SignalBuffer
-	opts     ManagerOptions
-	flushFn  FlushFunc
-	logger   *zap.Logger
+	mu        sync.RWMutex
+	buffers   map[string]*SignalBuffer
+	opts      ManagerOptions
+	flushFn   FlushFunc
+	logger    *zap.Logger
 	allocator memory.Allocator
 
 	cancel context.CancelFunc
@@ -108,15 +116,23 @@ func validateOptions(opts ManagerOptions) error {
 	return nil
 }
 
-// Start begins the background time-based flush goroutine.
-func (m *Manager) Start() {
+// Start begins the background time-based flush goroutine and registers
+// telemetry callbacks.
+func (m *Manager) Start() error {
+	if err := m.registerTelemetryCallbacks(); err != nil {
+		return fmt.Errorf("register telemetry callbacks: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.done = make(chan struct{})
 	go m.flushLoop(ctx)
+	return nil
 }
 
 // Stop cancels the background flush goroutine, then drains all buffers.
+// Telemetry callbacks remain registered until the TelemetryBuilder is
+// shut down by its owner (typically the exporter).
 func (m *Manager) Stop(ctx context.Context) error {
 	if m.cancel != nil {
 		m.cancel()
@@ -178,9 +194,27 @@ func (m *Manager) newStoreFor(table string) (recordStore, error) {
 }
 
 func (m *Manager) flushBuffer(ctx context.Context, buf *SignalBuffer) error {
-	return buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
+	start := time.Now()
+	rows, err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
 		return m.flushFn(ctx, buf.Table(), records, rows)
 	})
+
+	// Record telemetry only when there was actual work (rows>0) or a failure.
+	// Empty drains are no-ops we don't want polluting the histograms.
+	if m.opts.Telemetry != nil && (rows > 0 || err != nil) {
+		outcome := "success"
+		if err != nil {
+			outcome = "failure"
+		}
+		attrs := metric.WithAttributeSet(attribute.NewSet(
+			attribute.String("outcome", outcome),
+			attribute.String("table", buf.Table()),
+		))
+		m.opts.Telemetry.ExporterIcebergBufferFlushes.Add(ctx, 1, attrs)
+		m.opts.Telemetry.ExporterIcebergBufferFlushDurationSeconds.Record(ctx, time.Since(start).Seconds(), attrs)
+	}
+
+	return err
 }
 
 func (m *Manager) flushAll(ctx context.Context) error {
@@ -221,4 +255,78 @@ func (m *Manager) flushLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// registerTelemetryCallbacks wires the four async gauge metrics. The
+// callbacks iterate buffers under m.mu and acquire each SignalBuffer's mu
+// briefly to read its current snapshot. Order matters: under no path is a
+// SignalBuffer.mu held while m.mu is taken, so no deadlock.
+func (m *Manager) registerTelemetryCallbacks() error {
+	tb := m.opts.Telemetry
+	if tb == nil {
+		return nil
+	}
+	if err := tb.RegisterExporterIcebergBufferRowsCallback(func(_ context.Context, o metric.Int64Observer) error {
+		for _, snap := range m.snapshotBufferMetrics() {
+			o.Observe(snap.metrics.Rows, metric.WithAttributes(attribute.String("table", snap.table)))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := tb.RegisterExporterIcebergBufferPendingFilesCallback(func(_ context.Context, o metric.Int64Observer) error {
+		for _, snap := range m.snapshotBufferMetrics() {
+			o.Observe(int64(snap.metrics.PendingFiles), metric.WithAttributes(attribute.String("table", snap.table)))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := tb.RegisterExporterIcebergBufferPendingBytesCallback(func(_ context.Context, o metric.Int64Observer) error {
+		for _, snap := range m.snapshotBufferMetrics() {
+			o.Observe(snap.metrics.PendingBytes, metric.WithAttributes(attribute.String("table", snap.table)))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := tb.RegisterExporterIcebergBufferPendingOldestAgeSecondsCallback(func(_ context.Context, o metric.Float64Observer) error {
+		for _, snap := range m.snapshotBufferMetrics() {
+			o.Observe(snap.metrics.OldestPendingAgeSeconds, metric.WithAttributes(attribute.String("table", snap.table)))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// bufferMetricSnapshot pairs a table name with its current metrics snapshot.
+type bufferMetricSnapshot struct {
+	table   string
+	metrics BufferMetrics
+}
+
+// snapshotBufferMetrics returns a per-buffer snapshot of telemetry counters.
+// m.mu is released before per-buffer locks are acquired so the only locking
+// order is m.mu → buf.mu, never the reverse.
+func (m *Manager) snapshotBufferMetrics() []bufferMetricSnapshot {
+	m.mu.RLock()
+	pairs := make([]struct {
+		table string
+		buf   *SignalBuffer
+	}, 0, len(m.buffers))
+	for table, buf := range m.buffers {
+		pairs = append(pairs, struct {
+			table string
+			buf   *SignalBuffer
+		}{table, buf})
+	}
+	m.mu.RUnlock()
+
+	snaps := make([]bufferMetricSnapshot, 0, len(pairs))
+	for _, p := range pairs {
+		snaps = append(snaps, bufferMetricSnapshot{table: p.table, metrics: p.buf.Metrics()})
+	}
+	return snaps
 }

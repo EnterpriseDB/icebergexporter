@@ -50,7 +50,7 @@ func TestDiskStoreBasicAppendFlushCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
 		if rows != 10 {
 			t.Errorf("expected 10 rows, got %d", rows)
 		}
@@ -90,7 +90,7 @@ func TestDiskStoreFailedFlushKeepsPendingFile(t *testing.T) {
 	}
 
 	failErr := errors.New("simulated failure")
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		return 0, failErr
 	}); !errors.Is(err, failErr) {
 		t.Fatalf("expected failErr, got %v", err)
@@ -109,7 +109,7 @@ func TestDiskStoreFailedFlushKeepsPendingFile(t *testing.T) {
 	}
 
 	// Retry succeeds — pending file consumed.
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
 		if rows != 7 {
 			t.Errorf("retry expected 7 rows, got %d", rows)
 		}
@@ -136,7 +136,7 @@ func TestDiskStoreFailedFlushPlusNewAppendsCombineOnRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	_, _ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		return 0, errors.New("fail")
 	})
 
@@ -150,7 +150,7 @@ func TestDiskStoreFailedFlushPlusNewAppendsCombineOnRetry(t *testing.T) {
 		t.Errorf("expected 10 rows total, got %d", buf.Rows())
 	}
 
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
 		if rows != 10 {
 			t.Errorf("retry expected 10 rows, got %d", rows)
 		}
@@ -174,7 +174,7 @@ func TestDiskStoreRecoversPendingFiles(t *testing.T) {
 		if err := buf.Add(rec); err != nil {
 			t.Fatal(err)
 		}
-		_ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+		_, _ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 			return 0, errors.New("fail")
 		})
 	}
@@ -193,7 +193,7 @@ func TestDiskStoreRecoversPendingFiles(t *testing.T) {
 	}
 
 	var seenRows int64
-	if err := buf2.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
+	if _, err := buf2.FlushVia(func(_ []arrow.RecordBatch, rows int64) (int64, error) {
 		seenRows = rows
 		return 0, nil
 	}); err != nil {
@@ -237,7 +237,7 @@ func TestDiskStoreRecoversOrphanedActive(t *testing.T) {
 
 	buf := newSignalBufferWithStore("test", store2)
 	var rows int64
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, r int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, r int64) (int64, error) {
 		rows = r
 		return 0, nil
 	}); err != nil {
@@ -277,7 +277,7 @@ func TestDiskStoreEmptyDrainNoop(t *testing.T) {
 	buf := newSignalBufferWithStore("test", mustNewDiskStore(t, dir))
 
 	called := false
-	if err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+	if _, err := buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 		called = true
 		return 0, nil
 	}); err != nil {
@@ -298,7 +298,7 @@ func TestDiskStoreSequenceMonotonic(t *testing.T) {
 			t.Fatal(err)
 		}
 		rec.Release()
-		_ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
+		_, _ = buf.FlushVia(func(_ []arrow.RecordBatch, _ int64) (int64, error) {
 			return 0, errors.New("fail")
 		})
 	}

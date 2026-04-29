@@ -1,6 +1,8 @@
 // Copyright 2026- EnterpriseDB
 // SPDX-License-Identifier: Apache-2.0
 
+//go:generate mdatagen metadata.yaml
+
 package icebergexporter
 
 import (
@@ -9,21 +11,18 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
-)
 
-const (
-	typeStr   = "iceberg"
-	stability = component.StabilityLevelAlpha
+	"github.com/enterprisedb/icebergexporter/internal/metadata"
 )
 
 // NewFactory creates a new Iceberg exporter factory.
 func NewFactory() exporter.Factory {
 	return exporter.NewFactory(
-		component.MustNewType(typeStr),
+		metadata.Type,
 		createDefaultConfig,
-		exporter.WithTraces(createTracesExporter, stability),
-		exporter.WithMetrics(createMetricsExporter, stability),
-		exporter.WithLogs(createLogsExporter, stability),
+		exporter.WithTraces(createTracesExporter, metadata.TracesStability),
+		exporter.WithMetrics(createMetricsExporter, metadata.MetricsStability),
+		exporter.WithLogs(createLogsExporter, metadata.LogsStability),
 	)
 }
 

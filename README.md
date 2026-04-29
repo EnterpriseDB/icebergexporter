@@ -64,13 +64,31 @@ Override via `promoted.traces`, `promoted.logs`, `promoted.metrics` in config.
 The buffer manager uses a hybrid flush strategy:
 
 - **Size trigger:** synchronous flush when a table's buffer exceeds
-  `max_size_bytes` (default 128 MB). Errors propagate to the collector for
+  `max_size` (default 128 MiB). Errors propagate to the collector for
   retry via the OTel exporter helper.
 - **Time trigger:** background flush of all non-empty buffers every
-  `flush_interval` (default 60s). Errors are logged and records re-appended.
+  `flush_interval` (default 60s). Errors are logged; on flush failure the
+  records remain drainable for the next attempt.
 
 Bytes-per-row is calibrated after the first Parquet write per table, then
 updated via exponential moving average.
+
+#### Storage backends
+
+The buffer keeps records on one of two backends, selected via
+`buffer.storage.type`:
+
+- **`memory` (default):** records sit in RAM until flush. Lowest overhead;
+  records in flight are lost if the process crashes.
+- **`disk`:** records are serialised to Arrow IPC stream files on local disk
+  and survive crashes. The active stream is rotated to a new pending file on
+  every drain; pending files are deleted only when their flush succeeds. On
+  startup, any orphaned active stream is recovered as a pending file.
+  Requires `buffer.storage.path` for the root directory; each table gets a
+  subdirectory underneath.
+
+Disk-backed buffering is the right choice for hour-scale `flush_interval`
+values or any deployment where in-flight data must survive restarts.
 
 ## Quickstart
 

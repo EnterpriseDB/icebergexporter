@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
@@ -50,6 +51,13 @@ const (
 
 var pendingFilenameRE = regexp.MustCompile(`^pending-(\d+)\.ipc$`)
 
+// pendingFile is a sealed record file awaiting flush.
+type pendingFile struct {
+	path      string
+	bytes     int64
+	rotatedAt time.Time
+}
+
 // diskStore is an Arrow-IPC-stream-backed recordStore. Records are appended
 // to a single active.ipc file. On Drain, the active file is rotated to a new
 // pending-NNNNNN.ipc and all pending files are read back as the drained set;
@@ -74,8 +82,9 @@ type diskStore struct {
 	activeRows   int64
 	activeSchema *arrow.Schema
 
-	drainingFiles []string // absolute paths, sorted ascending by sequence
+	drainingFiles []pendingFile // sorted ascending by sequence (== rotatedAt)
 	drainingRows  int64
+	drainingBytes int64
 
 	nextSeq uint64
 	alloc   memory.Allocator
@@ -110,7 +119,7 @@ func (s *diskStore) recover() error {
 	var maxSeq uint64
 	activePath := filepath.Join(s.dir, activeFilename)
 	activeExists := false
-	var pending []string
+	var pendingPaths []string
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -132,7 +141,7 @@ func (s *diskStore) recover() error {
 		if seq > maxSeq {
 			maxSeq = seq
 		}
-		pending = append(pending, filepath.Join(s.dir, name))
+		pendingPaths = append(pendingPaths, filepath.Join(s.dir, name))
 	}
 
 	s.nextSeq = maxSeq + 1
@@ -143,19 +152,28 @@ func (s *diskStore) recover() error {
 		if err := os.Rename(activePath, target); err != nil {
 			return fmt.Errorf("promote orphaned active.ipc: %w", err)
 		}
-		pending = append(pending, target)
+		pendingPaths = append(pendingPaths, target)
 		s.nextSeq++
 	}
 
-	sort.Strings(pending)
-	s.drainingFiles = pending
+	sort.Strings(pendingPaths)
 
-	for _, p := range pending {
+	for _, p := range pendingPaths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("stat pending file %s: %w", p, err)
+		}
 		rows, err := countRowsInIPC(p)
 		if err != nil {
 			return fmt.Errorf("count rows in %s: %w", p, err)
 		}
+		s.drainingFiles = append(s.drainingFiles, pendingFile{
+			path:      p,
+			bytes:     info.Size(),
+			rotatedAt: info.ModTime(),
+		})
 		s.drainingRows += rows
+		s.drainingBytes += info.Size()
 	}
 	return nil
 }
@@ -207,27 +225,28 @@ func (s *diskStore) Drain() ([]arrow.RecordBatch, int64, func(), error) {
 	}
 
 	var allRecords []arrow.RecordBatch
-	for _, path := range s.drainingFiles {
-		recs, err := readIPCFile(path, s.alloc)
+	for _, pf := range s.drainingFiles {
+		recs, err := readIPCFile(pf.path, s.alloc)
 		if err != nil {
 			for _, r := range allRecords {
 				r.Release()
 			}
-			return nil, 0, nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, 0, nil, fmt.Errorf("read %s: %w", pf.path, err)
 		}
 		allRecords = append(allRecords, recs...)
 	}
 
 	rows := s.drainingRows
-	snapshot := make([]string, len(s.drainingFiles))
+	snapshot := make([]pendingFile, len(s.drainingFiles))
 	copy(snapshot, s.drainingFiles)
 
 	commit := func() {
-		for _, p := range snapshot {
-			_ = os.Remove(p) // best-effort; orphans recovered on next restart
+		for _, pf := range snapshot {
+			_ = os.Remove(pf.path) // best-effort; orphans recovered on next restart
 		}
 		s.drainingFiles = nil
 		s.drainingRows = 0
+		s.drainingBytes = 0
 	}
 
 	return allRecords, rows, commit, nil
@@ -246,9 +265,18 @@ func (s *diskStore) rotateActive() error {
 	if err := os.Rename(activePath, target); err != nil {
 		return fmt.Errorf("rotate active to %s: %w", target, err)
 	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("stat rotated file %s: %w", target, err)
+	}
 
-	s.drainingFiles = append(s.drainingFiles, target)
+	s.drainingFiles = append(s.drainingFiles, pendingFile{
+		path:      target,
+		bytes:     info.Size(),
+		rotatedAt: time.Now(),
+	})
 	s.drainingRows += s.activeRows
+	s.drainingBytes += info.Size()
 	s.nextSeq++
 
 	s.activeWriter = nil
@@ -285,6 +313,18 @@ func (s *diskStore) Close() {
 		// active.ipc remains on disk for recovery on next startup.
 	}
 	// drainingFiles remain on disk; recovery handles them next time.
+}
+
+func (s *diskStore) Metrics() StoreMetrics {
+	var oldestAge float64
+	if len(s.drainingFiles) > 0 {
+		oldestAge = time.Since(s.drainingFiles[0].rotatedAt).Seconds()
+	}
+	return StoreMetrics{
+		PendingFiles:            len(s.drainingFiles),
+		PendingBytes:            s.drainingBytes,
+		OldestPendingAgeSeconds: oldestAge,
+	}
 }
 
 // readIPCFile reads all record batches from an Arrow IPC stream file.
