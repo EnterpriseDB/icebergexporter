@@ -149,6 +149,12 @@ func newDiskStore(dir string, alloc memory.Allocator, logger *zap.Logger) (*disk
 		_ = lk.Unlock()
 		return nil, fmt.Errorf("recover spill dir %s: %w", dir, err)
 	}
+	s.logger.Info("disk-backed buffer ready",
+		zap.String("dir", dir),
+		zap.Int("recovered_pending_files", len(s.drainingFiles)),
+		zap.Int64("recovered_rows", s.drainingRows),
+		zap.Int64("recovered_bytes", s.drainingBytes),
+	)
 	return s, nil
 }
 
@@ -207,6 +213,10 @@ func (s *diskStore) recover() error {
 		if err := os.Rename(activePath, target); err != nil {
 			return fmt.Errorf("promote orphaned active.ipc: %w", err)
 		}
+		s.logger.Info("recovered orphaned active stream",
+			zap.String("dir", s.dir),
+			zap.String("promoted_to", filepath.Base(target)),
+		)
 		pendings = append(pendings, pendingEntry{seq: s.nextSeq, path: target})
 		s.nextSeq++
 	}
