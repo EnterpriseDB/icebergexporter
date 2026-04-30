@@ -118,10 +118,12 @@ services:
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
       - ./otel-config.yaml:/etc/otel/config.yaml:ro
+      - iceberg-buffer:/var/lib/icebergexporter/buffer
     ports:
       - "4317:4317"
       - "4318:4318"
       - "55679:55679"
+      - "8888:8888"
     depends_on:
       lakekeeper-warehouse:
         condition: service_completed_successfully
@@ -166,3 +168,4 @@ services:
 volumes:
   minio-data:
   lakekeeper-data:
+  iceberg-buffer:

@@ -1,4 +1,4 @@
-type: exporter
+type: iceberg
 scope_name: github.com/enterprisedb/icebergexporter
 
 status:
@@ -19,3 +19,87 @@ tests:
     catalog:
       type: rest
       uri: http://localhost:19120/api/v1
+  # Lifecycle requires a running dev stack (MinIO + Iceberg REST catalogue).
+  # The factory/start/shutdown paths are exercised by exporter_test.go's
+  # TestExporterStartShutdown using the noop catalog.
+  skip_lifecycle: true
+
+telemetry:
+  metrics:
+    exporter_iceberg_buffer_flush_duration_seconds:
+      enabled: true
+      stability: alpha
+      description: Duration of flush attempts for a table.
+      unit: s
+      histogram:
+        value_type: double
+      attributes:
+        - outcome
+        - table
+
+    exporter_iceberg_buffer_flushes:
+      enabled: true
+      stability: alpha
+      description: Number of flush attempts for a table.
+      unit: "{flush}"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes:
+        - outcome
+        - table
+
+    exporter_iceberg_buffer_pending_bytes:
+      enabled: true
+      stability: alpha
+      description: Total disk bytes across pending files for a table. Always 0 when the in-memory buffer is in use.
+      unit: By
+      gauge:
+        async: true
+        value_type: int
+      attributes:
+        - table
+
+    exporter_iceberg_buffer_pending_files:
+      enabled: true
+      stability: alpha
+      description: Number of disk-backed pending files awaiting flush for a table. Always 0 when the in-memory buffer is in use.
+      unit: "{file}"
+      gauge:
+        async: true
+        value_type: int
+      attributes:
+        - table
+
+    exporter_iceberg_buffer_pending_oldest_age_seconds:
+      enabled: true
+      stability: alpha
+      description: Age of the oldest pending file for a table, in seconds. Always 0 when no pending files exist or when the in-memory buffer is in use.
+      unit: s
+      gauge:
+        async: true
+        value_type: double
+      attributes:
+        - table
+
+    exporter_iceberg_buffer_rows:
+      enabled: true
+      stability: alpha
+      description: Current number of buffered rows for a table awaiting flush.
+      unit: "{row}"
+      gauge:
+        async: true
+        value_type: int
+      attributes:
+        - table
+
+attributes:
+  outcome:
+    description: Outcome of the flush attempt.
+    type: string
+    enum:
+      - success
+      - failure
+  table:
+    description: The buffered table name (signal type, e.g. otel_traces, otel_metrics_gauge).
+    type: string

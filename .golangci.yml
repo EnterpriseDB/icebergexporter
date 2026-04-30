@@ -34,7 +34,10 @@ linters:
         - G115
         - G304
     misspell:
-      locale: US
+      locale: UK
+      # humanize is the dustin/go-humanize package name, not text.
+      ignore-rules:
+        - humanize
     revive:
       rules:
         - name: blank-imports

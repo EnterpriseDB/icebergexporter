@@ -64,7 +64,7 @@ func ExtractPromotedAttributes(attrs pcommon.Map, promoted []string) PromotedRes
 	return result
 }
 
-// MapToJSON serializes a pcommon.Map to a JSON string.
+// MapToJSON serialises a pcommon.Map to a JSON string.
 // Returns empty string for empty maps.
 func MapToJSON(m pcommon.Map) string {
 	if m.Len() == 0 {
