@@ -27,7 +27,7 @@ exporters:
       namespace: otel
       warehouse: otel
     buffer:
-      max_size_bytes: 134217728
+      max_size: 128Mi
       flush_interval: 10s
   debug:
     verbosity: basic

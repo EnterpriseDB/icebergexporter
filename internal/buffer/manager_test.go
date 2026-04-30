@@ -6,6 +6,7 @@ package buffer
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,6 +158,67 @@ func TestManagerMultipleTables(t *testing.T) {
 	}
 	if flushed["logs"] != 20 {
 		t.Errorf("expected 20 log rows, got %d", flushed["logs"])
+	}
+}
+
+func TestManagerConcurrentFirstAddOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	flushFn := func(_ context.Context, _ string, _ []arrow.RecordBatch, totalRows int64) (int64, error) {
+		return totalRows * 50, nil
+	}
+	mgr, err := NewManager(ManagerOptions{
+		MaxSizeBytes:  0,
+		FlushInterval: time.Hour,
+		Storage:       StorageOptions{Type: StorageDisk, Path: dir},
+	}, flushFn, zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = mgr.Stop(context.Background()) }()
+
+	// Race many goroutines on first-Add for the SAME table. Without per-table
+	// construction serialisation, the disk-store flock would cause all but
+	// one to fail with "locked by another process".
+	const goroutines = 32
+	var (
+		wg      sync.WaitGroup
+		startCh = make(chan struct{})
+		errs    = make([]error, goroutines)
+	)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			rec := makeTestRecord(1)
+			defer rec.Release()
+			<-startCh
+			errs[idx] = mgr.Add(context.Background(), "otel_traces", rec)
+		}(i)
+	}
+	close(startCh)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: Add failed: %v", i, err)
+		}
+	}
+
+	// Exactly one buffer should exist for the table — all goroutines shared it.
+	mgr.mu.RLock()
+	bufCount := len(mgr.buffers)
+	mgr.mu.RUnlock()
+	if bufCount != 1 {
+		t.Errorf("expected 1 buffer in map, got %d", bufCount)
+	}
+
+	// All rows must be visible on the single buffer.
+	rows := mgr.buffers["otel_traces"].Rows()
+	if rows != int64(goroutines) {
+		t.Errorf("expected %d rows total, got %d", goroutines, rows)
 	}
 }
 

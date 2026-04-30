@@ -98,8 +98,8 @@ attributes:
     description: Outcome of the flush attempt.
     type: string
     enum:
-      - failure
       - success
+      - failure
   table:
     description: The buffered table name (signal type, e.g. otel_traces, otel_metrics_gauge).
     type: string

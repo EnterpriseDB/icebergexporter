@@ -59,6 +59,21 @@ type pendingFile struct {
 	rotatedAt time.Time
 }
 
+// schemaFieldList renders an Arrow schema as a compact "[name:type, …]" list
+// for use in error messages — Schema.String produces a multi-line dump that
+// is hard to read when tailed in logs.
+func schemaFieldList(s *arrow.Schema) string {
+	if s == nil {
+		return "<nil>"
+	}
+	fields := s.Fields()
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = f.Name + ":" + f.Type.String()
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 // diskStore is an Arrow-IPC-stream-backed recordStore. Records are appended
 // to a single active.ipc file. On Drain, the active file is rotated to a new
 // pending-NNNNNN.ipc and all pending files are read back as the drained set;
@@ -143,10 +158,19 @@ func (s *diskStore) recover() error {
 		return fmt.Errorf("read dir: %w", err)
 	}
 
+	// Collect pending entries with their parsed sequence numbers so we can
+	// sort numerically rather than lexicographically. The %06d format width
+	// is presentation-only; sequences past 999_999 widen and would defeat a
+	// string sort.
+	type pendingEntry struct {
+		seq  uint64
+		path string
+	}
+
 	var maxSeq uint64
 	activePath := filepath.Join(s.dir, activeFilename)
 	activeExists := false
-	var pendingPaths []string
+	var pendings []pendingEntry
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -171,34 +195,35 @@ func (s *diskStore) recover() error {
 		if seq > maxSeq {
 			maxSeq = seq
 		}
-		pendingPaths = append(pendingPaths, filepath.Join(s.dir, name))
+		pendings = append(pendings, pendingEntry{seq: seq, path: filepath.Join(s.dir, name)})
 	}
 
 	s.nextSeq = maxSeq + 1
 
-	// Promote orphaned active.ipc to a pending file.
+	// Promote orphaned active.ipc to a pending file with the next sequence,
+	// so it sorts after every existing pending.
 	if activeExists {
 		target := filepath.Join(s.dir, fmt.Sprintf(pendingFilenameFmt, s.nextSeq))
 		if err := os.Rename(activePath, target); err != nil {
 			return fmt.Errorf("promote orphaned active.ipc: %w", err)
 		}
-		pendingPaths = append(pendingPaths, target)
+		pendings = append(pendings, pendingEntry{seq: s.nextSeq, path: target})
 		s.nextSeq++
 	}
 
-	sort.Strings(pendingPaths)
+	sort.Slice(pendings, func(i, j int) bool { return pendings[i].seq < pendings[j].seq })
 
-	for _, p := range pendingPaths {
-		info, err := os.Stat(p)
+	for _, pe := range pendings {
+		info, err := os.Stat(pe.path)
 		if err != nil {
-			return fmt.Errorf("stat pending file %s: %w", p, err)
+			return fmt.Errorf("stat pending file %s: %w", pe.path, err)
 		}
-		rows, err := countRowsInIPC(p)
+		rows, err := countRowsInIPC(pe.path)
 		if err != nil {
-			return fmt.Errorf("count rows in %s: %w", p, err)
+			return fmt.Errorf("count rows in %s: %w", pe.path, err)
 		}
 		s.drainingFiles = append(s.drainingFiles, pendingFile{
-			path:      p,
+			path:      pe.path,
 			bytes:     info.Size(),
 			rotatedAt: info.ModTime(),
 		})
@@ -214,8 +239,8 @@ func (s *diskStore) Append(rec arrow.RecordBatch) error {
 			return err
 		}
 	} else if !s.activeSchema.Equal(rec.Schema()) {
-		return fmt.Errorf("buffer schema mismatch: active stream uses %s, record has %s",
-			s.activeSchema, rec.Schema())
+		return fmt.Errorf("buffer schema mismatch: active stream fields=%s, record fields=%s",
+			schemaFieldList(s.activeSchema), schemaFieldList(rec.Schema()))
 	}
 
 	if err := s.activeWriter.Write(rec); err != nil {
@@ -420,6 +445,13 @@ func readIPCFile(path string, alloc memory.Allocator) ([]arrow.RecordBatch, erro
 	return records, nil
 }
 
+// countRowsInIPC scans an Arrow IPC stream file and returns its total row
+// count. Used during recovery to populate drainingRows; the same files are
+// re-read at the next Drain to materialise records. The double-read is
+// acceptable because pending sets are bounded by max_size and only large
+// failure backlogs make this visible. If recovery time becomes a concern,
+// row count could be cached alongside pendingFile (or written into a
+// trailing footer at rotate time).
 func countRowsInIPC(path string) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {

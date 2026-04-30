@@ -72,6 +72,7 @@ type ManagerOptions struct {
 type Manager struct {
 	mu        sync.RWMutex
 	buffers   map[string]*SignalBuffer
+	creating  sync.Map // map[string]*sync.Mutex — per-table store-construction lock
 	opts      ManagerOptions
 	flushFn   FlushFunc
 	logger    *zap.Logger
@@ -79,6 +80,8 @@ type Manager struct {
 
 	startOnce sync.Once
 	startErr  error
+	stopOnce  sync.Once
+	stopErr   error
 	cancel    context.CancelFunc
 	done      chan struct{}
 }
@@ -104,7 +107,7 @@ func NewManager(opts ManagerOptions, flushFn FlushFunc, logger *zap.Logger) (*Ma
 
 func validateOptions(opts ManagerOptions) error {
 	if opts.MaxSizeBytes < 0 {
-		return fmt.Errorf("max_size_bytes must be non-negative, got %d", opts.MaxSizeBytes)
+		return fmt.Errorf("max_size must be non-negative, got %d", opts.MaxSizeBytes)
 	}
 	if opts.FlushInterval < 0 {
 		return fmt.Errorf("flush_interval must be non-negative, got %s", opts.FlushInterval)
@@ -139,20 +142,29 @@ func (m *Manager) Start() error {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancel = cancel
 		m.done = make(chan struct{})
-		go m.flushLoop(ctx)
+		go func() {
+			// defer cancel() so the context is always released when the
+			// flush loop exits, even if Stop was never called.
+			defer cancel()
+			m.flushLoop(ctx)
+		}()
 	})
 	return m.startErr
 }
 
 // Stop cancels the background flush goroutine, then drains all buffers.
-// Telemetry callbacks remain registered until the TelemetryBuilder is
-// shut down by its owner (typically the exporter).
+// Idempotent — subsequent calls return the first call's error without
+// re-cancelling or re-draining. Telemetry callbacks remain registered until
+// the TelemetryBuilder is shut down by its owner (typically the exporter).
 func (m *Manager) Stop(ctx context.Context) error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	return m.flushAll(ctx)
+	m.stopOnce.Do(func() {
+		if m.cancel != nil {
+			m.cancel()
+			<-m.done
+		}
+		m.stopErr = m.flushAll(ctx)
+	})
+	return m.stopErr
 }
 
 // Add adds a record to the named table's buffer. If the post-Add size would
@@ -184,6 +196,7 @@ func (m *Manager) Add(ctx context.Context, table string, rec arrow.RecordBatch) 
 }
 
 func (m *Manager) getOrCreateBuffer(table string) (*SignalBuffer, error) {
+	// Fast path: already exists.
 	m.mu.RLock()
 	buf, ok := m.buffers[table]
 	m.mu.RUnlock()
@@ -191,8 +204,29 @@ func (m *Manager) getOrCreateBuffer(table string) (*SignalBuffer, error) {
 		return buf, nil
 	}
 
-	// Construct the store outside the write lock — disk recovery can do
-	// significant I/O that we don't want serialising every Add on first use.
+	// Slow path: serialise construction per-table. The disk-backed store
+	// takes a flock on its directory at newDiskStore time, so two concurrent
+	// first-Add goroutines for the same table must not both attempt
+	// construction — the loser would see "locked by another process" and
+	// fail its Add. Per-table mutex keeps construction parallel across
+	// different tables while serialising same-table contenders.
+	cmuI, _ := m.creating.LoadOrStore(table, &sync.Mutex{})
+	cmu := cmuI.(*sync.Mutex)
+	cmu.Lock()
+	defer cmu.Unlock()
+
+	// Re-check under the per-table mutex: a peer goroutine may have
+	// constructed the buffer while we were waiting.
+	m.mu.RLock()
+	buf, ok = m.buffers[table]
+	m.mu.RUnlock()
+	if ok {
+		return buf, nil
+	}
+
+	// Construct the store. Disk recovery can do significant I/O — we hold
+	// only the per-table mutex here, not m.mu, so unrelated tables can
+	// still claim/look-up entries in parallel.
 	store, err := m.newStoreFor(table)
 	if err != nil {
 		return nil, fmt.Errorf("create store for table %q: %w", table, err)
@@ -200,8 +234,9 @@ func (m *Manager) getOrCreateBuffer(table string) (*SignalBuffer, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Belt-and-braces: under the per-table mutex no peer can have inserted,
+	// but check anyway in case construction-races assumptions ever change.
 	if existing, ok := m.buffers[table]; ok {
-		// Lost the race; discard our new store and use the winner's.
 		store.Close()
 		return existing, nil
 	}
@@ -225,23 +260,31 @@ func (m *Manager) flushBuffer(ctx context.Context, buf *SignalBuffer) error {
 	rows, err := buf.FlushVia(func(records []arrow.RecordBatch, rows int64) (int64, error) {
 		return m.flushFn(ctx, buf.Table(), records, rows)
 	})
-
-	// Record telemetry only when there was actual work (rows>0) or a failure.
-	// Empty drains are no-ops we don't want polluting the histograms.
-	if m.opts.Telemetry != nil && (rows > 0 || err != nil) {
-		outcome := "success"
-		if err != nil {
-			outcome = "failure"
-		}
-		attrs := metric.WithAttributeSet(attribute.NewSet(
-			attribute.String("outcome", outcome),
-			attribute.String("table", buf.Table()),
-		))
-		m.opts.Telemetry.ExporterIcebergBufferFlushes.Add(ctx, 1, attrs)
-		m.opts.Telemetry.ExporterIcebergBufferFlushDurationSeconds.Record(ctx, time.Since(start).Seconds(), attrs)
-	}
-
+	m.recordFlushTelemetry(ctx, buf.Table(), rows, err, time.Since(start))
 	return err
+}
+
+// recordFlushTelemetry emits the per-flush counter and duration histogram.
+// No-op when Telemetry is nil (the documented "metrics disabled" path) or
+// when there was nothing to do (empty drain with no error) — empty drains
+// are not "flush attempts" we want polluting the histograms.
+func (m *Manager) recordFlushTelemetry(ctx context.Context, table string, rows int64, flushErr error, dur time.Duration) {
+	if m.opts.Telemetry == nil {
+		return
+	}
+	if rows == 0 && flushErr == nil {
+		return
+	}
+	outcome := "success"
+	if flushErr != nil {
+		outcome = "failure"
+	}
+	attrs := metric.WithAttributeSet(attribute.NewSet(
+		attribute.String("outcome", outcome),
+		attribute.String("table", table),
+	))
+	m.opts.Telemetry.ExporterIcebergBufferFlushes.Add(ctx, 1, attrs)
+	m.opts.Telemetry.ExporterIcebergBufferFlushDurationSeconds.Record(ctx, dur.Seconds(), attrs)
 }
 
 func (m *Manager) flushAll(ctx context.Context) error {

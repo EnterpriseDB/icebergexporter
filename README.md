@@ -81,14 +81,16 @@ The buffer keeps records on one of two backends, selected via
 - **`memory` (default):** records sit in RAM until flush. Lowest overhead;
   records in flight are lost if the process crashes.
 - **`disk`:** records are serialised to Arrow IPC stream files on local disk
-  and survive crashes. The active stream is rotated to a new pending file on
-  every drain; pending files are deleted only when their flush succeeds. On
-  startup, any orphaned active stream is recovered as a pending file.
-  Requires `buffer.storage.path` for the root directory; each table gets a
-  subdirectory underneath.
+  and survive **process crashes** (kernel page cache is not `fsync`ed, so OS
+  crash or power loss can still lose unflushed records). The active stream
+  is rotated to a new pending file on every drain; pending files are deleted
+  only when their flush succeeds. On startup, any orphaned active stream is
+  recovered as a pending file. Requires `buffer.storage.path` for the root
+  directory; each table gets a subdirectory underneath. The directory is
+  flock-protected against multi-process access.
 
 Disk-backed buffering is the right choice for hour-scale `flush_interval`
-values or any deployment where in-flight data must survive restarts.
+values or any deployment where in-flight data must survive process restarts.
 
 ## Quickstart
 

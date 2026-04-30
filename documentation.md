@@ -18,7 +18,7 @@ Duration of flush attempts for a table.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| outcome | Outcome of the flush attempt. | Str: ``failure``, ``success`` | - |
+| outcome | Outcome of the flush attempt. | Str: ``success``, ``failure`` | - |
 | table | The buffered table name (signal type, e.g. otel_traces, otel_metrics_gauge). | Any Str | - |
 
 ### otelcol_exporter_iceberg_buffer_flushes
@@ -33,7 +33,7 @@ Number of flush attempts for a table.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| outcome | Outcome of the flush attempt. | Str: ``failure``, ``success`` | - |
+| outcome | Outcome of the flush attempt. | Str: ``success``, ``failure`` | - |
 | table | The buffered table name (signal type, e.g. otel_traces, otel_metrics_gauge). | Any Str | - |
 
 ### otelcol_exporter_iceberg_buffer_pending_bytes
