@@ -18,7 +18,7 @@ OTel Collector pipeline
             → Iceberg catalog commit (optional)
 ```
 
-Signals are written to 7 tables:
+Signals are written to the following tables:
 
 | Signal   | Table(s) |
 |----------|----------|
