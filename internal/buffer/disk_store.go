@@ -218,7 +218,7 @@ func (s *diskStore) recover() error {
 		if err != nil {
 			return fmt.Errorf("stat pending file %s: %w", pe.path, err)
 		}
-		rows, err := countRowsInIPC(pe.path)
+		rows, err := s.countRowsInIPC(pe.path)
 		if err != nil {
 			return fmt.Errorf("count rows in %s: %w", pe.path, err)
 		}
@@ -304,7 +304,7 @@ func (s *diskStore) Drain() ([]arrow.RecordBatch, int64, func(), error) {
 
 	var allRecords []arrow.RecordBatch
 	for _, pf := range s.drainingFiles {
-		recs, err := readIPCFile(pf.path, s.alloc)
+		recs, err := s.readIPCFile(pf.path)
 		if err != nil {
 			for _, r := range allRecords {
 				r.Release()
@@ -419,16 +419,18 @@ func (s *diskStore) Metrics() StoreMetrics {
 }
 
 // readIPCFile reads all record batches from an Arrow IPC stream file.
-// Truncated files (e.g. from a crash mid-write) are tolerated: the reader
-// returns whatever complete messages it can parse and the tail is dropped.
-func readIPCFile(path string, alloc memory.Allocator) ([]arrow.RecordBatch, error) {
-	f, err := os.Open(path)
+// Truncated tails (e.g. from a crash mid-write) are tolerated: the reader
+// returns whatever complete messages it parsed and the tail is dropped.
+// A non-nil reader.Err() is logged at Warn level — operators see corruption
+// signals while the buffer remains drainable for the rest of the data.
+func (s *diskStore) readIPCFile(path string) ([]arrow.RecordBatch, error) {
+	f, err := os.Open(path) // #nosec G304 — path is constructed by us under s.dir.
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	reader, err := ipc.NewReader(f, ipc.WithAllocator(alloc))
+	reader, err := ipc.NewReader(f, ipc.WithAllocator(s.alloc))
 	if err != nil {
 		return nil, fmt.Errorf("open ipc reader: %w", err)
 	}
@@ -440,8 +442,12 @@ func readIPCFile(path string, alloc memory.Allocator) ([]arrow.RecordBatch, erro
 		rec.Retain() // outlive reader.Release
 		records = append(records, rec)
 	}
-	// Truncated tail (e.g. crash mid-write) is tolerated; accept the prefix.
-	_ = reader.Err()
+	if rerr := reader.Err(); rerr != nil {
+		s.logger.Warn("ipc reader returned a non-nil error; accepting parsed prefix",
+			zap.String("path", path),
+			zap.Int("records_parsed", len(records)),
+			zap.Error(rerr))
+	}
 	return records, nil
 }
 
@@ -452,8 +458,11 @@ func readIPCFile(path string, alloc memory.Allocator) ([]arrow.RecordBatch, erro
 // failure backlogs make this visible. If recovery time becomes a concern,
 // row count could be cached alongside pendingFile (or written into a
 // trailing footer at rotate time).
-func countRowsInIPC(path string) (int64, error) {
-	f, err := os.Open(path)
+//
+// Truncated tails are tolerated; a non-nil reader.Err() is logged at Warn
+// level so corruption is surfaced without aborting recovery.
+func (s *diskStore) countRowsInIPC(path string) (int64, error) {
+	f, err := os.Open(path) // #nosec G304 — path is constructed by us under s.dir.
 	if err != nil {
 		return 0, err
 	}
@@ -469,7 +478,11 @@ func countRowsInIPC(path string) (int64, error) {
 	for reader.Next() {
 		rows += reader.RecordBatch().NumRows()
 	}
-	// Truncated tail is tolerated; return what we counted.
-	_ = reader.Err()
+	if rerr := reader.Err(); rerr != nil {
+		s.logger.Warn("ipc reader returned a non-nil error during row-count scan; accepting partial count",
+			zap.String("path", path),
+			zap.Int64("rows_counted", rows),
+			zap.Error(rerr))
+	}
 	return rows, nil
 }
