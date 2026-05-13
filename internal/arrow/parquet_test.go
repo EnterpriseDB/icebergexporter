@@ -4,6 +4,7 @@
 package arrow
 
 import (
+	"bytes"
 	"testing"
 
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
@@ -30,10 +31,11 @@ func TestWriteParquet(t *testing.T) {
 	rec := makeSimpleRecord(100)
 	defer rec.Release()
 
-	data, err := WriteParquet(rec, compress.Codecs.Zstd)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := WriteParquet(rec, &buf, compress.Codecs.Zstd); err != nil {
 		t.Fatalf("WriteParquet failed: %v", err)
 	}
+	data := buf.Bytes()
 	if len(data) == 0 {
 		t.Error("expected non-empty Parquet data")
 	}
@@ -47,11 +49,11 @@ func TestWriteParquetSnappy(t *testing.T) {
 	rec := makeSimpleRecord(10)
 	defer rec.Release()
 
-	data, err := WriteParquet(rec, compress.Codecs.Snappy)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := WriteParquet(rec, &buf, compress.Codecs.Snappy); err != nil {
 		t.Fatalf("WriteParquet (snappy) failed: %v", err)
 	}
-	if len(data) == 0 {
+	if buf.Len() == 0 {
 		t.Error("expected non-empty Parquet data")
 	}
 }

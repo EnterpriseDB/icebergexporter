@@ -6,6 +6,7 @@ package writer
 import (
 	"context"
 	"fmt"
+	"io"
 
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -118,23 +119,19 @@ func (w *Writer) Flush(ctx context.Context, table string, records []arrowlib.Rec
 	var dataFiles []iceberg.DataFile
 
 	for _, part := range partitions {
-		data, err := iarrow.WriteParquet(part.Record, iarrow.DefaultCompression())
-		if err != nil {
-			return totalBytes, fmt.Errorf("writing parquet for partition %s: %w", part.Key.HivePath(), err)
-		}
-
 		path := iceberg.DataFilePath(table, part.Key.HivePath())
-		if err := w.fileIO.Write(ctx, path, data); err != nil {
-			return totalBytes, fmt.Errorf("uploading to S3 %s: %w", path, err)
-		}
 
-		totalBytes += int64(len(data))
+		n, err := w.streamPartition(ctx, part.Record, path)
+		if err != nil {
+			return totalBytes, fmt.Errorf("writing partition %s: %w", part.Key.HivePath(), err)
+		}
+		totalBytes += n
 
 		dataFiles = append(dataFiles, iceberg.DataFile{
 			Path:            w.fileIO.URI(path),
 			Format:          "PARQUET",
 			RecordCount:     part.Record.NumRows(),
-			FileSizeBytes:   int64(len(data)),
+			FileSizeBytes:   n,
 			PartitionValues: part.Key.PartitionValues(),
 		})
 
@@ -142,7 +139,7 @@ func (w *Writer) Flush(ctx context.Context, table string, records []arrowlib.Rec
 			zap.String("table", table),
 			zap.String("partition", part.Key.HivePath()),
 			zap.Int64("rows", part.Record.NumRows()),
-			zap.Int("bytes", len(data)),
+			zap.Int64("bytes", n),
 		)
 	}
 
@@ -159,4 +156,30 @@ func (w *Writer) Flush(ctx context.Context, table string, records []arrowlib.Rec
 	)
 
 	return totalBytes, nil
+}
+
+// streamPartition encodes rec to Parquet and uploads it without buffering the
+// full file in memory. The Parquet writer runs in a goroutine that writes into
+// an io.Pipe; the FileIO reads from the pipe and streams parts to S3. If the
+// writer errors, the pipe is closed with that error so the uploader observes
+// it instead of EOF.
+func (w *Writer) streamPartition(ctx context.Context, rec arrowlib.RecordBatch, path string) (int64, error) {
+	pr, pw := io.Pipe()
+
+	go func() {
+		err := iarrow.WriteParquet(rec, pw, iarrow.DefaultCompression())
+		// CloseWithError(nil) is equivalent to Close — propagates EOF to the
+		// reader on success.
+		pw.CloseWithError(err)
+	}()
+
+	n, err := w.fileIO.Write(ctx, path, pr)
+	if err != nil {
+		// Drain so a still-running writer goroutine can exit (Write blocks on
+		// the pipe). CloseWithError on the reader side unblocks any pending
+		// pw.Write with ErrClosedPipe.
+		pr.CloseWithError(err)
+		return n, err
+	}
+	return n, nil
 }

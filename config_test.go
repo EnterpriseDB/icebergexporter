@@ -29,6 +29,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Partition.Granularity != PartitionHour {
 		t.Errorf("expected default partition granularity hour, got %s", cfg.Partition.Granularity)
 	}
+	if cfg.Storage.Upload.PartSize != 16*1024*1024 {
+		t.Errorf("expected default upload part size 16MiB, got %d", cfg.Storage.Upload.PartSize)
+	}
+	if cfg.Storage.Upload.Concurrency != 5 {
+		t.Errorf("expected default upload concurrency 5, got %d", cfg.Storage.Upload.Concurrency)
+	}
+	if cfg.Storage.Upload.MaxAttempts != 3 {
+		t.Errorf("expected default upload max_attempts 3, got %d", cfg.Storage.Upload.MaxAttempts)
+	}
 }
 
 func TestByteSizeUnmarshalText(t *testing.T) {
@@ -211,6 +220,36 @@ func TestConfigValidate(t *testing.T) {
 				cfg.Storage.Bucket = "test"
 				cfg.Catalog.URI = "http://localhost:19120"
 				cfg.Partition.Granularity = "minute"
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative upload part_size",
+			modify: func(cfg *Config) {
+				cfg.Storage.Endpoint = "http://localhost:9000"
+				cfg.Storage.Bucket = "test"
+				cfg.Catalog.URI = "http://localhost:19120"
+				cfg.Storage.Upload.PartSize = -1
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative upload concurrency",
+			modify: func(cfg *Config) {
+				cfg.Storage.Endpoint = "http://localhost:9000"
+				cfg.Storage.Bucket = "test"
+				cfg.Catalog.URI = "http://localhost:19120"
+				cfg.Storage.Upload.Concurrency = -1
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative upload max_attempts",
+			modify: func(cfg *Config) {
+				cfg.Storage.Endpoint = "http://localhost:9000"
+				cfg.Storage.Bucket = "test"
+				cfg.Catalog.URI = "http://localhost:19120"
+				cfg.Storage.Upload.MaxAttempts = -1
 			},
 			wantErr: true,
 		},

@@ -10,8 +10,9 @@ import (
 
 // FileIO abstracts object storage operations for writing Parquet data files.
 type FileIO interface {
-	// Write uploads data to the given path.
-	Write(ctx context.Context, path string, data []byte) error
+	// Write streams data from r to the given path. The implementation reads r
+	// to EOF. Returns the number of bytes written.
+	Write(ctx context.Context, path string, r io.Reader) (int64, error)
 
 	// Read retrieves data from the given path.
 	Read(ctx context.Context, path string) ([]byte, error)

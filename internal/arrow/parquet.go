@@ -4,8 +4,8 @@
 package arrow
 
 import (
-	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -15,10 +15,9 @@ import (
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 )
 
-// WriteParquet serialises an Arrow record to Parquet bytes using the given compression.
-func WriteParquet(rec arrow.RecordBatch, compression compress.Compression) ([]byte, error) {
-	var buf bytes.Buffer
-
+// WriteParquet serialises an Arrow record to Parquet, writing the encoded
+// bytes to w as they are produced.
+func WriteParquet(rec arrow.RecordBatch, w io.Writer, compression compress.Compression) error {
 	writerProps := parquet.NewWriterProperties(
 		parquet.WithCompression(compression),
 		parquet.WithDictionaryDefault(true),
@@ -26,21 +25,21 @@ func WriteParquet(rec arrow.RecordBatch, compression compress.Compression) ([]by
 	)
 	arrowProps := pqarrow.DefaultWriterProps()
 
-	writer, err := pqarrow.NewFileWriter(rec.Schema(), &buf, writerProps, arrowProps)
+	writer, err := pqarrow.NewFileWriter(rec.Schema(), w, writerProps, arrowProps)
 	if err != nil {
-		return nil, fmt.Errorf("creating parquet writer: %w", err)
+		return fmt.Errorf("creating parquet writer: %w", err)
 	}
 
 	if err := writer.Write(rec); err != nil {
 		writer.Close()
-		return nil, fmt.Errorf("writing parquet data: %w", err)
+		return fmt.Errorf("writing parquet data: %w", err)
 	}
 
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("closing parquet writer: %w", err)
+		return fmt.Errorf("closing parquet writer: %w", err)
 	}
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 // MergeRecords concatenates multiple Arrow records with the same schema into one.

@@ -65,6 +65,11 @@ func (e *icebergExporter) start(ctx context.Context, host component.Host) error 
 		AccessKey: e.cfg.Storage.AccessKey,
 		SecretKey: e.cfg.Storage.SecretKey,
 		PathStyle: e.cfg.Storage.PathStyle,
+		Upload: iceberg.S3UploadOptions{
+			PartSize:    int64(e.cfg.Storage.Upload.PartSize),
+			Concurrency: e.cfg.Storage.Upload.Concurrency,
+			MaxAttempts: e.cfg.Storage.Upload.MaxAttempts,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("creating file IO: %w", err)

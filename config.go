@@ -25,13 +25,35 @@ type Config struct {
 
 // StorageConfig holds S3-compatible storage settings.
 type StorageConfig struct {
-	Endpoint  string `mapstructure:"endpoint"`
-	Bucket    string `mapstructure:"bucket"`
-	Prefix    string `mapstructure:"prefix"`
-	Region    string `mapstructure:"region"`
-	AccessKey string `mapstructure:"access_key"`
-	SecretKey string `mapstructure:"secret_key"`
-	PathStyle bool   `mapstructure:"path_style"`
+	Endpoint  string       `mapstructure:"endpoint"`
+	Bucket    string       `mapstructure:"bucket"`
+	Prefix    string       `mapstructure:"prefix"`
+	Region    string       `mapstructure:"region"`
+	AccessKey string       `mapstructure:"access_key"`
+	SecretKey string       `mapstructure:"secret_key"`
+	PathStyle bool         `mapstructure:"path_style"`
+	Upload    UploadConfig `mapstructure:"upload"`
+}
+
+// UploadConfig tunes the multipart S3 uploader. Defaults are applied when a
+// field is zero.
+type UploadConfig struct {
+	// PartSize is the size of each multipart chunk.
+	//
+	// S3 caps an object at 10,000 parts, so PartSize sets the ceiling on the
+	// largest file the exporter can upload:
+	//
+	//     max_file_size ≈ part_size × 10000
+	//
+	// Default 16MiB → max object ≈ 160 GiB. If you expect single flushed
+	// files larger than that, raise this. Rule of thumb:
+	// part_size ≥ largest_expected_file / 10000.
+	PartSize ByteSize `mapstructure:"part_size"`
+	// Concurrency is the number of parts uploaded in parallel.
+	Concurrency int `mapstructure:"concurrency"`
+	// MaxAttempts is the per-request retry count (each part is one request).
+	// The SDK retryer uses exponential backoff with jitter between attempts.
+	MaxAttempts int `mapstructure:"max_attempts"`
 }
 
 // CatalogConfig holds Iceberg catalog settings.
@@ -129,6 +151,15 @@ func (cfg *Config) Validate() error {
 	if cfg.Buffer.FlushInterval < 0 {
 		return errors.New("buffer.flush_interval must be non-negative")
 	}
+	if cfg.Storage.Upload.PartSize < 0 {
+		return errors.New("storage.upload.part_size must be non-negative")
+	}
+	if cfg.Storage.Upload.Concurrency < 0 {
+		return errors.New("storage.upload.concurrency must be non-negative")
+	}
+	if cfg.Storage.Upload.MaxAttempts < 0 {
+		return errors.New("storage.upload.max_attempts must be non-negative")
+	}
 	switch cfg.Buffer.Storage.Type {
 	case "", "memory":
 		// valid; empty defaults to memory
@@ -154,6 +185,11 @@ func defaultConfig() *Config {
 			Region:    "us-east-1",
 			Prefix:    "iceberg",
 			PathStyle: true,
+			Upload: UploadConfig{
+				PartSize:    16 * 1024 * 1024, // 16 MiB
+				Concurrency: 5,
+				MaxAttempts: 3,
+			},
 		},
 		Catalog: CatalogConfig{
 			Type:      "rest",

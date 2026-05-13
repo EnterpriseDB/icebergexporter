@@ -4,11 +4,11 @@ An OpenTelemetry Collector exporter that writes traces, logs, and metrics as
 Parquet files to S3-compatible storage, optionally managed by an Iceberg REST
 catalog.
 
-**OTel Collector → Parquet on S3 → queryable via any Iceberg-compatible engine**
+> OTel Collector → Parquet on S3 → queryable via any Iceberg-compatible engine
 
 ## Architecture
 
-```
+```text
 OTel Collector pipeline
   → consumeTraces / consumeLogs / consumeMetrics
     → Arrow converter (otel collector pipeline data → columnar arrow.Record)
@@ -20,12 +20,12 @@ OTel Collector pipeline
 
 Signals are written to the following tables:
 
-| Signal   | Table(s) |
-|----------|----------|
-| Traces   | `otel_traces` |
-| Logs     | `otel_logs` |
+| Signal   | Table(s)                                                                                                                |
+|----------|-------------------------------------------------------------------------------------------------------------------------|
+| Traces   | `otel_traces`                                                                                                           |
+| Logs     | `otel_logs`                                                                                                             |
 | Metrics  | `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exp_histogram`, `otel_metrics_summary` |
-| Profiles | `in progress` |
+| Profiles | `in progress`                                                                                                           |
 
 Each table is partitioned by time on its timestamp column
 (`start_time_unix_nano` for traces, `time_unix_nano` for logs and metrics) using
@@ -203,6 +203,13 @@ exporters:
       access_key: minioadmin            # S3 access key.
       secret_key: minioadmin            # S3 secret key.
       path_style: true                  # Use path-style URLs (required for MinIO). Default: true
+      upload:
+        part_size: 16Mi                 # Multipart chunk size. S3 caps an object at 10,000 parts,
+                                        # so max object ≈ part_size × 10000. Default 16Mi → ~160GiB
+                                        # ceiling. Rule of thumb: part_size ≥ largest_file / 10000.
+        concurrency: 5                  # Parts uploaded in parallel. Default: 5
+        max_attempts: 3                 # Per-request retries (each part is one request) with
+                                        # SDK exponential backoff + jitter. Default: 3
 
     catalog:
       type: rest                        # "rest" or "noop". Default: "rest"
@@ -233,9 +240,9 @@ exporters:
 
 ### Catalog modes
 
-| Mode   | Behaviour |
-|--------|-----------|
-| `noop` | Writes Parquet files to S3 only. No Iceberg metadata. Files are queryable directly via `read_parquet()` globs. |
+| Mode   | Behaviour                                                                                                                                                                          |
+|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `noop` | Writes Parquet files to S3 only. No Iceberg metadata. Files are queryable directly via `read_parquet()` globs.                                                                     |
 | `rest` | Writes Parquet files to S3, then commits them to an Iceberg REST catalog (e.g., [Lakekeeper](https://lakekeeper.io), Apache Polaris). Creates namespaces and tables on first write. |
 
 The dev stack uses Lakekeeper as the REST catalog. Any implementation that

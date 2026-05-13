@@ -5,6 +5,7 @@ package writer
 
 import (
 	"context"
+	"io"
 	"sync"
 	"testing"
 
@@ -27,11 +28,15 @@ func newMemoryFileIO() *memoryFileIO {
 	return &memoryFileIO{files: make(map[string][]byte)}
 }
 
-func (f *memoryFileIO) Write(_ context.Context, path string, data []byte) error {
+func (f *memoryFileIO) Write(_ context.Context, path string, r io.Reader) (int64, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return int64(len(data)), err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[path] = data
-	return nil
+	return int64(len(data)), nil
 }
 
 func (f *memoryFileIO) Read(_ context.Context, path string) ([]byte, error) {
